@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yourname/ratelimit"
+	"github.com/yuliiaharel/ratelimit"
 )
 
 // FixedWindowConfig configures a FixedWindow limiter.

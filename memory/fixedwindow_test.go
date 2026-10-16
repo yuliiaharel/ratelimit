@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yourname/ratelimit"
-	"github.com/yourname/ratelimit/clocktest"
+	"github.com/yuliiaharel/ratelimit"
+	"github.com/yuliiaharel/ratelimit/clocktest"
 )
 
 // Aligned to a minute boundary so window math is easy to read.

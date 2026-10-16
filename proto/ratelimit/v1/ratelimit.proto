@@ -4,7 +4,7 @@ package ratelimit.v1;
 
 import "google/protobuf/duration.proto";
 
-option go_package = "github.com/<you>/ratelimit/gen/ratelimit/v1;ratelimitv1";
+option go_package = "github.com/yuliiaharel/ratelimit/gen/ratelimit/v1;ratelimitv1";
 
 // RateLimitService decides whether a caller may proceed.
 // Callers check before doing work; the service holds shared counters.
