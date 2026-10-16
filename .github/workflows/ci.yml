@@ -33,3 +33,9 @@ jobs:
       - uses: golangci/golangci-lint-action@v6
         with:
           version: latest
+          # The action's default "binary" mode downloads a prebuilt
+          # golangci-lint that may be built with an older Go than this
+          # module declares (it refuses to run if so). "goinstall"
+          # builds it from source with the toolchain setup-go just
+          # installed, so it's always compatible.
+          install-mode: goinstall

@@ -34,9 +34,10 @@ lim := memory.NewTokenBucket(memory.TokenBucketConfig{
     Burst: 20,   // bucket capacity
 })
 
+keyFunc := interceptor.KeyFromMetadata("x-api-key")
 srv := grpc.NewServer(
-    grpc.UnaryInterceptor(interceptor.Unary(lim, interceptor.KeyFromMetadata("x-api-key"))),
-    grpc.StreamInterceptor(interceptor.Stream(lim, interceptor.PerMessage)),
+    grpc.UnaryInterceptor(interceptor.Unary(lim, keyFunc)),
+    grpc.StreamInterceptor(interceptor.Stream(lim, keyFunc, interceptor.PerMessage)),
 )
 ```
 
@@ -110,7 +111,21 @@ _TODO: whose clock wins — app server or Redis `TIME`? Trade-offs with clock sk
 _TODO: how cost consumes tokens; how sheddable traffic gets a lower effective limit (reserved headroom for critical)._
 
 ### Streaming RPCs
-_TODO: limit per stream, per message, or both? What happens to a stream mid-flight when the limit is hit?_
+
+`interceptor.Stream` supports both, via a `StreamMode`:
+
+- **`PerStream`**: checks the limit once, before the handler runs. Limits how many
+  streams a key may open (e.g. one long-lived subscription per key) -- cheap, and
+  the natural choice when a stream's cost is in opening it, not in what flows after.
+- **`PerMessage`**: checks before every message the client sends, by wrapping
+  `RecvMsg`. Limits the rate of events a client pushes over one long-lived stream.
+
+A stream hit mid-flight doesn't get torn down out of band: in `PerMessage` mode, the
+*next* `RecvMsg` call returns the `ResourceExhausted` error instead of the client's
+message, and it's up to the handler's own loop to notice that error and return (which
+ends the RPC with that status) -- the interceptor can't unilaterally stop a handler
+that's already running. `PerStream` mode never faces this: the only check happens
+before the handler starts, so a denial there means the handler never runs at all.
 
 ### The extra hop
 _TODO: latency budget of calling RateLimitService; batching (`ShouldAllowBatch`); client-side local token cache to avoid a call per request._
@@ -158,7 +173,7 @@ Each step is sized for one ~45-minute session.
 - [x] **2. Token bucket**: in-memory implementation, fake-clock tests for refill, burst, and cost > 1
 - [x] **3. Sliding windows**: log and counter variants; a test comparing accuracy against fixed window at window edges
 - [ ] **4. Concurrency**: sharded locks, `-race` stress test, first benchmarks
-- [ ] **5. gRPC interceptors**: unary + streaming, `RESOURCE_EXHAUSTED` with `RetryInfo`, key extraction from metadata, example server
+- [x] **5. gRPC interceptors**: unary + streaming, `RESOURCE_EXHAUSTED` with `RetryInfo`, key extraction from metadata, example server
 - [ ] **6. Redis backend**: token bucket in Lua, `docker-compose`, integration tests (testcontainers)
 
 **Service**
