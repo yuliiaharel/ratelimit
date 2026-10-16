@@ -155,8 +155,8 @@ Each step is sized for one ~45-minute session.
 
 **Library**
 - [x] **1. Scaffold**: `go mod init`, `Limiter` interface, `Clock` abstraction, fixed window (in-memory), table-driven tests, GitHub Actions (`go test -race`, `golangci-lint`)
-- [ ] **2. Token bucket**: in-memory implementation, fake-clock tests for refill, burst, and cost > 1
-- [ ] **3. Sliding windows**: log and counter variants; a test comparing accuracy against fixed window at window edges
+- [x] **2. Token bucket**: in-memory implementation, fake-clock tests for refill, burst, and cost > 1
+- [x] **3. Sliding windows**: log and counter variants; a test comparing accuracy against fixed window at window edges
 - [ ] **4. Concurrency**: sharded locks, `-race` stress test, first benchmarks
 - [ ] **5. gRPC interceptors**: unary + streaming, `RESOURCE_EXHAUSTED` with `RetryInfo`, key extraction from metadata, example server
 - [ ] **6. Redis backend**: token bucket in Lua, `docker-compose`, integration tests (testcontainers)
