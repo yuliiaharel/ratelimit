@@ -122,20 +122,49 @@ _TODO: YAML policy config keyed by domain; hot reload without restart; what happ
 _TODO: Redis or RateLimitService unavailable → fail-open (availability) vs. fail-closed (protection), per domain. Timeouts, circuit breaking._
 
 ### Concurrency (in-memory backend)
-_TODO: single mutex vs. sharded locks; benchmark numbers._
+
+Each in-memory limiter keeps its per-key state in a `shardedMap`: the
+key space is split across a fixed number of shards (32 by default),
+each with its own mutex, instead of one mutex for the whole limiter. A
+single mutex serializes every key, even ones that never contend with
+each other; sharding by key hash removes that false contention. It does
+nothing for one hot key, which still serializes on that key's shard.
+
+The effect, measured directly (`BenchmarkFixedWindow_ShardCount`, Apple
+M5, `go test -bench . -benchmem`, parallel access across 1024 keys):
+
+| Shards | ns/op |
+|---|---|
+| 1 (one mutex for everything) | ~153 |
+| 32 (default) | ~39 |
+
+About a 4x improvement at this core count and key spread, from a
+one-line change at each limiter's construction site.
 
 ---
 
 ## Benchmarks
 
-_TODO: `go test -bench` results, machine spec._
+`go test -bench . -benchmem ./memory/...`, Apple M5 (10 cores), go1.27.2 darwin/arm64.
+`SingleKey` is every call hitting the same key (worst case: one shard does all the work);
+`ManyKeys` spreads calls over 1024 distinct keys in parallel (where sharding pays off).
 
-| Backend / algorithm | ns/op | allocs/op |
-|---|---|---|
-| memory / token bucket | | |
-| memory / sliding counter | | |
-| redis / token bucket | | |
-| service round-trip (p50 / p99) | | |
+| Backend / algorithm | ns/op (SingleKey) | ns/op (ManyKeys) | allocs/op |
+|---|---|---|---|
+| memory / fixed window | ~163 | ~38 | 0 |
+| memory / token bucket | ~168 | ~40 | 0 |
+| memory / sliding window log | ~175 | ~55 | 0 (small heap growth, see below) |
+| memory / sliding window counter | ~159 | ~42 | 0 |
+| redis / token bucket | | | |
+| service round-trip (p50 / p99) | | | |
+
+Sliding window log reports 0 allocs/op but nonzero B/op (~26-150) under `-benchmem`: its
+per-key log occasionally grows its backing slice via `append`, which `go test` attributes
+to the slice's bytes rather than a separate allocation count. It's also the one algorithm
+whose *time* per call isn't O(1): Allow is O(stale entries evicted) amortized, which an
+earlier version of this benchmark caught failing at -- it was resumming the entire log by
+hand on every call instead of tracking total cost incrementally, making each call O(log
+length). Fixed before these numbers were taken; see `logState` in `slidingwindowlog.go`.
 
 ## Load test
 
@@ -157,7 +186,7 @@ Each step is sized for one ~45-minute session.
 - [x] **1. Scaffold**: `go mod init`, `Limiter` interface, `Clock` abstraction, fixed window (in-memory), table-driven tests, GitHub Actions (`go test -race`, `golangci-lint`)
 - [x] **2. Token bucket**: in-memory implementation, fake-clock tests for refill, burst, and cost > 1
 - [x] **3. Sliding windows**: log and counter variants; a test comparing accuracy against fixed window at window edges
-- [ ] **4. Concurrency**: sharded locks, `-race` stress test, first benchmarks
+- [x] **4. Concurrency**: sharded locks, `-race` stress test, first benchmarks
 - [ ] **5. gRPC interceptors**: unary + streaming, `RESOURCE_EXHAUSTED` with `RetryInfo`, key extraction from metadata, example server
 - [ ] **6. Redis backend**: token bucket in Lua, `docker-compose`, integration tests (testcontainers)
 

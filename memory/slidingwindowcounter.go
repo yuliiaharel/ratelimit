@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"math"
-	"sync"
 	"time"
 
 	"github.com/yuliiaharel/ratelimit"
@@ -41,9 +40,7 @@ type SlidingWindowCounter struct {
 	window time.Duration
 	clock  ratelimit.Clock
 
-	// A single mutex for now; sharding comes in roadmap step 4.
-	mu       sync.Mutex
-	counters map[string]*counterEntry
+	counters *shardedMap[counterEntry]
 }
 
 type counterEntry struct {
@@ -69,7 +66,7 @@ func NewSlidingWindowCounter(cfg SlidingWindowCounterConfig) (*SlidingWindowCoun
 		limit:    cfg.Limit,
 		window:   cfg.Window,
 		clock:    cfg.Clock,
-		counters: make(map[string]*counterEntry),
+		counters: newShardedMap[counterEntry](defaultShardCount),
 	}, nil
 }
 
@@ -87,46 +84,46 @@ func (s *SlidingWindowCounter) Allow(_ context.Context, req ratelimit.Request) (
 	now := s.clock.Now()
 	start := now.Truncate(s.window)
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	e, ok := s.counters[req.Key]
-	switch {
-	case !ok:
-		e = &counterEntry{start: start}
-		s.counters[req.Key] = e
-	case !e.start.Equal(start):
-		if start.Sub(e.start) == s.window {
-			// Consecutive window: today's current becomes yesterday's
-			// previous.
-			e.prev = e.curr
-		} else {
-			// Idle longer than a full window: no usable history.
-			e.prev = 0
+	var d ratelimit.Decision
+	s.counters.withLock(req.Key, func() *counterEntry { return &counterEntry{} }, func(e *counterEntry) {
+		if !e.start.Equal(start) {
+			// A zero-value e.start (brand new key) never equals a real
+			// start and never trails it by exactly one window, so this
+			// also correctly treats a fresh key as having no history.
+			if start.Sub(e.start) == s.window {
+				// Consecutive window: today's current becomes
+				// yesterday's previous.
+				e.prev = e.curr
+			} else {
+				// Idle longer than a full window: no usable history.
+				e.prev = 0
+			}
+			e.curr = 0
+			e.start = start
 		}
-		e.curr = 0
-		e.start = start
-	}
 
-	elapsed := now.Sub(e.start)
-	weight := float64(s.window-elapsed) / float64(s.window)
-	estimated := float64(e.prev)*weight + float64(e.curr)
+		elapsed := now.Sub(e.start)
+		weight := float64(s.window-elapsed) / float64(s.window)
+		estimated := float64(e.prev)*weight + float64(e.curr)
 
-	if estimated+float64(cost) > float64(s.limit)+windowEpsilon {
-		return ratelimit.Decision{
-			Allowed:    false,
-			Limit:      s.limit,
-			Remaining:  remainingTokens(s.limit, estimated),
-			RetryAfter: retryAfterCounter(e, s.window, s.limit, cost, elapsed),
-		}, nil
-	}
+		if estimated+float64(cost) > float64(s.limit)+windowEpsilon {
+			d = ratelimit.Decision{
+				Allowed:    false,
+				Limit:      s.limit,
+				Remaining:  remainingTokens(s.limit, estimated),
+				RetryAfter: retryAfterCounter(e, s.window, s.limit, cost, elapsed),
+			}
+			return
+		}
 
-	e.curr += cost
-	return ratelimit.Decision{
-		Allowed:   true,
-		Limit:     s.limit,
-		Remaining: remainingTokens(s.limit, estimated+float64(cost)),
-	}, nil
+		e.curr += cost
+		d = ratelimit.Decision{
+			Allowed:   true,
+			Limit:     s.limit,
+			Remaining: remainingTokens(s.limit, estimated+float64(cost)),
+		}
+	})
+	return d, nil
 }
 
 func remainingTokens(limit int, estimated float64) int {
