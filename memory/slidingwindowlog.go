@@ -3,7 +3,6 @@ package memory
 import (
 	"context"
 	"errors"
-	"sync"
 	"time"
 
 	"github.com/yuliiaharel/ratelimit"
@@ -37,14 +36,23 @@ type SlidingWindowLog struct {
 	window time.Duration
 	clock  ratelimit.Clock
 
-	// A single mutex for now; sharding comes in roadmap step 4.
-	mu   sync.Mutex
-	logs map[string][]logEntry
+	logs *shardedMap[logState]
 }
 
 type logEntry struct {
 	at   time.Time
 	cost int
+}
+
+// logState is the per-key state a SlidingWindowLog keeps: its log of
+// still-relevant requests (oldest first), and their total cost. used is
+// maintained incrementally -- decremented as entries are evicted,
+// incremented as one is added -- rather than resummed from the log on
+// every call, which would make each call cost O(entries) instead of
+// O(1) amortized.
+type logState struct {
+	entries []logEntry
+	used    int
 }
 
 var _ ratelimit.Limiter = (*SlidingWindowLog)(nil)
@@ -64,7 +72,7 @@ func NewSlidingWindowLog(cfg SlidingWindowLogConfig) (*SlidingWindowLog, error) 
 		limit:  cfg.Limit,
 		window: cfg.Window,
 		clock:  cfg.Clock,
-		logs:   make(map[string][]logEntry),
+		logs:   newShardedMap[logState](defaultShardCount),
 	}, nil
 }
 
@@ -82,42 +90,39 @@ func (s *SlidingWindowLog) Allow(_ context.Context, req ratelimit.Request) (rate
 	now := s.clock.Now()
 	cutoff := now.Add(-s.window)
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	var d ratelimit.Decision
+	s.logs.withLock(req.Key, func() *logState { return &logState{} }, func(st *logState) {
+		entries := st.entries
+		// Evict everything that has aged out of the trailing window.
+		// Entries are appended in increasing time order, so the stale
+		// ones are always a prefix.
+		i := 0
+		for i < len(entries) && !entries[i].at.After(cutoff) {
+			st.used -= entries[i].cost
+			i++
+		}
+		entries = entries[i:]
+		st.entries = entries
 
-	entries := s.logs[req.Key]
-	// Evict everything that has aged out of the trailing window.
-	// Entries are appended in increasing time order, so the stale ones
-	// are always a prefix.
-	i := 0
-	for i < len(entries) && !entries[i].at.After(cutoff) {
-		i++
-	}
-	entries = entries[i:]
+		if st.used+cost > s.limit {
+			d = ratelimit.Decision{
+				Allowed:    false,
+				Limit:      s.limit,
+				Remaining:  s.limit - st.used,
+				RetryAfter: retryAfterLog(entries, now, s.window, st.used, cost, s.limit),
+			}
+			return
+		}
 
-	used := 0
-	for _, e := range entries {
-		used += e.cost
-	}
-
-	if used+cost > s.limit {
-		s.logs[req.Key] = entries
-		return ratelimit.Decision{
-			Allowed:    false,
-			Limit:      s.limit,
-			Remaining:  s.limit - used,
-			RetryAfter: retryAfterLog(entries, now, s.window, used, cost, s.limit),
-		}, nil
-	}
-
-	entries = append(entries, logEntry{at: now, cost: cost})
-	s.logs[req.Key] = entries
-	used += cost
-	return ratelimit.Decision{
-		Allowed:   true,
-		Limit:     s.limit,
-		Remaining: s.limit - used,
-	}, nil
+		st.entries = append(entries, logEntry{at: now, cost: cost})
+		st.used += cost
+		d = ratelimit.Decision{
+			Allowed:   true,
+			Limit:     s.limit,
+			Remaining: s.limit - st.used,
+		}
+	})
+	return d, nil
 }
 
 // retryAfterLog returns how long until enough cost has aged out of the
