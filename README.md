@@ -8,14 +8,7 @@ A distributed rate limiter in Go. It ships as a library (pluggable algorithms, i
 
 ## Why
 
-Most service routers and meshes can throttle traffic, but they throttle *traffic*: per host, per connection, per method. They don't know who the caller is, how expensive a request is, or whether it's critical or safely sheddable. So the knobs end up being blunt router configuration, and tuning them is a recurring source of "why are we getting throttled?" incidents.
-
-This project explores the layer above that: **application-aware rate limiting** that complements the router instead of replacing it.
-
-| Layer | Protects against | Knows about |
-|---|---|---|
-| Service router / mesh | Overload of a host or cluster | Connections, QPS per method |
-| **This limiter** | Unfair or abusive use, expensive requests, low-priority floods | Caller identity, tenant, request cost, priority |
+This project is about **application-aware rate limiting**: limits that key off caller identity, tenant, request cost, and priority — so unfair or abusive use, expensive requests, and low-priority floods can be throttled without blunt, one-size-fits-all knobs.
 
 ## Goals
 
@@ -26,11 +19,6 @@ This project explores the layer above that: **application-aware rate limiting** 
 - **Priority-aware**: under pressure, shed sheddable traffic before critical traffic
 - Measured, not guessed: benchmarks and load-test results in this README
 - Explicit failure behavior (fail-open vs. fail-closed, configurable)
-
-## Non-goals
-
-- Replacing the service router's own overload protection
-- Global limits across regions (discussed under [Scaling further](#scaling-further), not built)
 
 ---
 
