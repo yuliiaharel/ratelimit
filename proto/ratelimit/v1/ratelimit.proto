@@ -1,0 +1,76 @@
+syntax = "proto3";
+
+package ratelimit.v1;
+
+import "google/protobuf/duration.proto";
+
+option go_package = "github.com/<you>/ratelimit/gen/ratelimit/v1;ratelimitv1";
+
+// RateLimitService decides whether a caller may proceed.
+// Callers check before doing work; the service holds shared counters.
+service RateLimitService {
+  // Check a single key.
+  rpc ShouldAllow(ShouldAllowRequest) returns (ShouldAllowResponse);
+
+  // Check several keys in one round-trip (e.g. per-user AND per-tenant).
+  // The request is allowed only if every check passes; tokens are
+  // consumed only when all pass.
+  rpc ShouldAllowBatch(ShouldAllowBatchRequest) returns (ShouldAllowBatchResponse);
+}
+
+// How important the request is. Under pressure, SHEDDABLE traffic hits
+// its limit first so CRITICAL traffic keeps headroom.
+enum Priority {
+  PRIORITY_UNSPECIFIED = 0; // treated as DEFAULT
+  PRIORITY_CRITICAL = 1;
+  PRIORITY_DEFAULT = 2;
+  PRIORITY_SHEDDABLE = 3;
+}
+
+message ShouldAllowRequest {
+  // Policy namespace, e.g. "api", "send-message". Selects limits from config.
+  string domain = 1;
+
+  // The thing being limited, e.g. "user:42", "tenant:acme".
+  string key = 2;
+
+  // Tokens this request consumes. 0 is treated as 1.
+  uint32 cost = 3;
+
+  Priority priority = 4;
+}
+
+message ShouldAllowResponse {
+  enum Reason {
+    REASON_UNSPECIFIED = 0;
+    REASON_OK = 1;
+    REASON_OVER_LIMIT = 2;
+    // Backend unavailable and the domain is configured to fail open.
+    REASON_FAIL_OPEN = 3;
+    // Backend unavailable and the domain is configured to fail closed.
+    REASON_FAIL_CLOSED = 4;
+  }
+
+  bool allowed = 1;
+  Reason reason = 2;
+
+  uint32 limit = 3;
+  uint32 remaining = 4;
+
+  // Set when allowed is false.
+  google.protobuf.Duration retry_after = 5;
+
+  // Which policy produced this decision; useful when debugging throttling.
+  string policy_id = 6;
+}
+
+message ShouldAllowBatchRequest {
+  repeated ShouldAllowRequest checks = 1;
+}
+
+message ShouldAllowBatchResponse {
+  bool allowed = 1;
+
+  // One result per check, in request order.
+  repeated ShouldAllowResponse results = 2;
+}
