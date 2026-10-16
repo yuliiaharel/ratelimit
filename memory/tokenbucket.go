@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"math"
-	"sync"
 	"time"
 
 	"github.com/yuliiaharel/ratelimit"
@@ -40,9 +39,7 @@ type TokenBucket struct {
 	burst int
 	clock ratelimit.Clock
 
-	// A single mutex for now; sharding comes in roadmap step 4.
-	mu      sync.Mutex
-	buckets map[string]*bucketEntry
+	buckets *shardedMap[bucketEntry]
 }
 
 type bucketEntry struct {
@@ -67,7 +64,7 @@ func NewTokenBucket(cfg TokenBucketConfig) (*TokenBucket, error) {
 		rate:    cfg.Rate,
 		burst:   cfg.Burst,
 		clock:   cfg.Clock,
-		buckets: make(map[string]*bucketEntry),
+		buckets: newShardedMap[bucketEntry](defaultShardCount),
 	}, nil
 }
 
@@ -84,35 +81,33 @@ func (tb *TokenBucket) Allow(_ context.Context, req ratelimit.Request) (ratelimi
 
 	now := tb.clock.Now()
 
-	tb.mu.Lock()
-	defer tb.mu.Unlock()
+	var d ratelimit.Decision
+	create := func() *bucketEntry { return &bucketEntry{tokens: float64(tb.burst), last: now} }
+	tb.buckets.withLock(req.Key, create, func(e *bucketEntry) {
+		if elapsed := now.Sub(e.last); elapsed > 0 {
+			e.tokens = math.Min(float64(tb.burst), e.tokens+elapsed.Seconds()*tb.rate)
+			e.last = now
+		}
 
-	e, ok := tb.buckets[req.Key]
-	if !ok {
-		e = &bucketEntry{tokens: float64(tb.burst), last: now}
-		tb.buckets[req.Key] = e
-	}
-	if elapsed := now.Sub(e.last); elapsed > 0 {
-		e.tokens = math.Min(float64(tb.burst), e.tokens+elapsed.Seconds()*tb.rate)
-		e.last = now
-	}
+		if e.tokens+tokenEpsilon < float64(cost) {
+			deficit := float64(cost) - e.tokens
+			d = ratelimit.Decision{
+				Allowed:    false,
+				Limit:      tb.burst,
+				Remaining:  flooredTokens(e.tokens),
+				RetryAfter: time.Duration(deficit / tb.rate * float64(time.Second)),
+			}
+			return
+		}
 
-	if e.tokens+tokenEpsilon < float64(cost) {
-		deficit := float64(cost) - e.tokens
-		return ratelimit.Decision{
-			Allowed:    false,
-			Limit:      tb.burst,
-			Remaining:  flooredTokens(e.tokens),
-			RetryAfter: time.Duration(deficit / tb.rate * float64(time.Second)),
-		}, nil
-	}
-
-	e.tokens -= float64(cost)
-	return ratelimit.Decision{
-		Allowed:   true,
-		Limit:     tb.burst,
-		Remaining: flooredTokens(e.tokens),
-	}, nil
+		e.tokens -= float64(cost)
+		d = ratelimit.Decision{
+			Allowed:   true,
+			Limit:     tb.burst,
+			Remaining: flooredTokens(e.tokens),
+		}
+	})
+	return d, nil
 }
 
 func flooredTokens(tokens float64) int {

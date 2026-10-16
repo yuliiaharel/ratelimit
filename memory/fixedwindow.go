@@ -4,7 +4,6 @@ package memory
 import (
 	"context"
 	"errors"
-	"sync"
 	"time"
 
 	"github.com/yuliiaharel/ratelimit"
@@ -34,9 +33,7 @@ type FixedWindow struct {
 	window time.Duration
 	clock  ratelimit.Clock
 
-	// A single mutex for now; sharding comes in roadmap step 4.
-	mu      sync.Mutex
-	entries map[string]*windowEntry
+	entries *shardedMap[windowEntry]
 }
 
 type windowEntry struct {
@@ -61,7 +58,7 @@ func NewFixedWindow(cfg FixedWindowConfig) (*FixedWindow, error) {
 		limit:   cfg.Limit,
 		window:  cfg.Window,
 		clock:   cfg.Clock,
-		entries: make(map[string]*windowEntry),
+		entries: newShardedMap[windowEntry](defaultShardCount),
 	}, nil
 }
 
@@ -79,34 +76,32 @@ func (f *FixedWindow) Allow(_ context.Context, req ratelimit.Request) (ratelimit
 	now := f.clock.Now()
 	start := now.Truncate(f.window)
 
-	f.mu.Lock()
-	defer f.mu.Unlock()
+	var d ratelimit.Decision
+	f.entries.withLock(req.Key, func() *windowEntry { return &windowEntry{} }, func(e *windowEntry) {
+		if !e.start.Equal(start) {
+			// New window: reset. Stale entries for idle keys are
+			// reclaimed the next time the key is seen; TODO: background
+			// sweep so a key that goes idle forever doesn't linger.
+			e.start = start
+			e.used = 0
+		}
 
-	e, ok := f.entries[req.Key]
-	if !ok {
-		e = &windowEntry{}
-		f.entries[req.Key] = e
-	}
-	if !e.start.Equal(start) {
-		// New window: reset. Stale entries for idle keys are reclaimed
-		// the next time the key is seen; TODO(step 4): background sweep.
-		e.start = start
-		e.used = 0
-	}
+		if e.used+cost > f.limit {
+			d = ratelimit.Decision{
+				Allowed:    false,
+				Limit:      f.limit,
+				Remaining:  f.limit - e.used,
+				RetryAfter: start.Add(f.window).Sub(now),
+			}
+			return
+		}
 
-	if e.used+cost > f.limit {
-		return ratelimit.Decision{
-			Allowed:    false,
-			Limit:      f.limit,
-			Remaining:  f.limit - e.used,
-			RetryAfter: start.Add(f.window).Sub(now),
-		}, nil
-	}
-
-	e.used += cost
-	return ratelimit.Decision{
-		Allowed:   true,
-		Limit:     f.limit,
-		Remaining: f.limit - e.used,
-	}, nil
+		e.used += cost
+		d = ratelimit.Decision{
+			Allowed:   true,
+			Limit:     f.limit,
+			Remaining: f.limit - e.used,
+		}
+	})
+	return d, nil
 }
