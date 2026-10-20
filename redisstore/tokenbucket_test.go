@@ -146,6 +146,63 @@ func TestTokenBucketIntegration(t *testing.T) {
 		}
 	})
 
+	t.Run("batch: all checks succeed together", func(t *testing.T) {
+		decisions, allowed, err := tb.AllowBatch(ctx, []ratelimit.Request{
+			{Key: "batch-ok-a"},
+			{Key: "batch-ok-b"},
+		})
+		if err != nil {
+			t.Fatalf("AllowBatch: %v", err)
+		}
+		if !allowed {
+			t.Fatal("batch: want allowed")
+		}
+		for i, d := range decisions {
+			if !d.Allowed {
+				t.Fatalf("decision %d: want allowed", i)
+			}
+		}
+	})
+
+	t.Run("batch: one short key denies the whole batch and consumes nothing", func(t *testing.T) {
+		keyA, keyB := "batch-deny-a", "batch-deny-b"
+		// Drain keyB to 0 first.
+		if _, err := tb.Allow(ctx, ratelimit.Request{Key: keyB, Cost: 3}); err != nil {
+			t.Fatalf("draining keyB: %v", err)
+		}
+
+		decisions, allowed, err := tb.AllowBatch(ctx, []ratelimit.Request{
+			{Key: keyA, Cost: 1}, // would succeed alone
+			{Key: keyB, Cost: 1}, // would NOT succeed alone: already empty
+		})
+		if err != nil {
+			t.Fatalf("AllowBatch: %v", err)
+		}
+		if allowed {
+			t.Fatal("batch: want denied")
+		}
+		if decisions[0].Allowed || decisions[1].Allowed {
+			t.Fatalf("decisions = %+v, want both denied -- the batch is all-or-nothing", decisions)
+		}
+
+		// keyA's own tokens must be untouched: a batch that fails
+		// consumes nothing, anywhere.
+		d, err := tb.Allow(ctx, ratelimit.Request{Key: keyA, Cost: 3})
+		if err != nil || !d.Allowed {
+			t.Fatalf("keyA after denied batch: Allowed = %v, err = %v, want true, nil (full 3 still available)", d.Allowed, err)
+		}
+	})
+
+	t.Run("batch: cost above limit on any check errors without touching redis", func(t *testing.T) {
+		_, _, err := tb.AllowBatch(ctx, []ratelimit.Request{
+			{Key: "batch-too-big-a"},
+			{Key: "batch-too-big-b", Cost: 10},
+		})
+		if !errors.Is(err, ratelimit.ErrCostExceedsLimit) {
+			t.Fatalf("err = %v, want ErrCostExceedsLimit", err)
+		}
+	})
+
 	// TestConcurrentRequestsAreAtomic hammers one key from many
 	// goroutines, all hitting the same Redis instance over the
 	// network, and checks that exactly `burst` win -- the thing the

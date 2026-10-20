@@ -121,7 +121,16 @@ apply here); the alternative, trusting each caller's own clock, would let clock
 skew between app servers directly skew the limit.
 
 ### Cost and priority
-_TODO: how cost consumes tokens; how sheddable traffic gets a lower effective limit (reserved headroom for critical)._
+
+Cost: `ShouldAllowRequest.cost` flows straight into the same `Request.Cost` /
+`EffectiveCost()` every limiter already uses -- a cost-N request consumes N tokens
+in one atomic check, the same whether it's checked via the Go `Limiter` interface,
+a gRPC interceptor, or RateLimitService over HTTP/JSON.
+
+_TODO: priority is accepted end-to-end (proto, client, server) but not yet acted
+on -- every domain shares one uniform bucket regardless of priority. Reserved
+headroom for critical traffic, so sheddable traffic hits its limit first, is
+roadmap step 8._
 
 ### Streaming RPCs
 
@@ -141,7 +150,15 @@ that's already running. `PerStream` mode never faces this: the only check happen
 before the handler starts, so a denial there means the handler never runs at all.
 
 ### The extra hop
-_TODO: latency budget of calling RateLimitService; batching (`ShouldAllowBatch`); client-side local token cache to avoid a call per request._
+
+`ShouldAllowBatch` lets a caller check several keys in one round trip,
+atomically: the whole batch is allowed only if every check in it is, and tokens
+are only consumed when all of them pass. `redisstore/tokenbucketbatch.lua` does
+that all-or-nothing check-and-commit server-side, in one script, rather than the
+client making N separate calls and hoping nothing changes between them.
+
+_TODO: latency budget for the extra network hop; a client-side local token cache
+to avoid a call per request entirely (roadmap step 9)._
 
 ### Policies
 _TODO: YAML policy config keyed by domain; hot reload without restart; what happens to in-flight counters when a limit changes._
@@ -190,7 +207,7 @@ Each step is sized for one ~45-minute session.
 - [x] **6. Redis backend**: token bucket in Lua, `docker-compose`, integration tests (testcontainers)
 
 **Service**
-- [ ] **7. RateLimitService**: `.proto`, `buf generate`, connect-go server backed by Redis, Go client
+- [x] **7. RateLimitService**: `.proto`, `buf generate`, connect-go server backed by Redis, Go client
 - [ ] **8. Priority + policies**: criticality-aware shedding, YAML policies per domain with hot reload
 - [ ] **9. Failure modes + load test**: fail-open/closed per domain, timeouts, client-side fallback, load harness, results in README
 - [ ] **10. Polish**: fill in Design sections, diagrams, release `v0.1.0`, write the post

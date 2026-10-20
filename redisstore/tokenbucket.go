@@ -19,7 +19,13 @@ import (
 //go:embed tokenbucket.lua
 var tokenBucketScriptSrc string
 
-var tokenBucketScript = redis.NewScript(tokenBucketScriptSrc)
+//go:embed tokenbucketbatch.lua
+var tokenBucketBatchScriptSrc string
+
+var (
+	tokenBucketScript      = redis.NewScript(tokenBucketScriptSrc)
+	tokenBucketBatchScript = redis.NewScript(tokenBucketBatchScriptSrc)
+)
 
 // tokenEpsilon mirrors memory.TokenBucket's: it absorbs floating-point
 // error from the refill arithmetic (here done in Lua, not Go) so a
@@ -116,7 +122,11 @@ func (tb *TokenBucket) Allow(ctx context.Context, req ratelimit.Request) (rateli
 		return ratelimit.Decision{}, fmt.Errorf("redisstore: %w", err)
 	}
 
-	allowed, tokensRemaining, retryAfterSeconds, err := parseResult(res)
+	row, ok := res.([]any)
+	if !ok || len(row) < 3 {
+		return ratelimit.Decision{}, fmt.Errorf("redisstore: unexpected script result: %#v", res)
+	}
+	allowed, tokensRemaining, retryAfterSeconds, err := parseRow(row[0], row[1], row[2])
 	if err != nil {
 		return ratelimit.Decision{}, fmt.Errorf("redisstore: %w", err)
 	}
@@ -129,32 +139,80 @@ func (tb *TokenBucket) Allow(ctx context.Context, req ratelimit.Request) (rateli
 	}, nil
 }
 
-// parseResult unpacks the script's { allowed, tokens, retry_after, burst }
-// reply. tokens and retry_after are returned as strings (see
-// tokenbucket.lua for why) and parsed back into float64 here.
-func parseResult(res any) (allowed bool, tokens, retryAfterSeconds float64, err error) {
-	row, ok := res.([]any)
-	if !ok || len(row) < 3 {
-		return false, 0, 0, fmt.Errorf("unexpected script result: %#v", res)
+// AllowBatch checks every req atomically together: all of them succeed
+// or none of them do, and tokens are only consumed when they all do.
+// Returns one Decision per req, in the same order, plus whether the
+// batch as a whole was allowed. A denied batch consumes nothing.
+func (tb *TokenBucket) AllowBatch(ctx context.Context, reqs []ratelimit.Request) ([]ratelimit.Decision, bool, error) {
+	if len(reqs) == 0 {
+		return nil, true, nil
 	}
 
-	allowedN, ok := row[0].(int64)
-	if !ok {
-		return false, 0, 0, fmt.Errorf("unexpected 'allowed' field: %#v", row[0])
+	keys := make([]string, len(reqs))
+	args := make([]any, 3, 3+len(reqs))
+	args[0], args[1], args[2] = tb.rate, tb.burst, int(tb.ttl.Seconds())
+	for i, req := range reqs {
+		if err := req.Validate(); err != nil {
+			return nil, false, err
+		}
+		cost := req.EffectiveCost()
+		if cost > tb.burst {
+			return nil, false, ratelimit.ErrCostExceedsLimit
+		}
+		keys[i] = tb.keyPrefix + req.Key
+		args = append(args, cost)
 	}
 
-	tokensStr, ok := row[1].(string)
+	res, err := tokenBucketBatchScript.Run(ctx, tb.client, keys, args...).Result()
+	if err != nil {
+		return nil, false, fmt.Errorf("redisstore: %w", err)
+	}
+
+	rows, ok := res.([]any)
+	if !ok || len(rows) != len(reqs)*3 {
+		return nil, false, fmt.Errorf("redisstore: unexpected batch script result: %#v", res)
+	}
+
+	decisions := make([]ratelimit.Decision, len(reqs))
+	allAllowed := true
+	for i := range reqs {
+		allowed, tokens, retryAfterSeconds, perr := parseRow(rows[i*3], rows[i*3+1], rows[i*3+2])
+		if perr != nil {
+			return nil, false, fmt.Errorf("redisstore: %w", perr)
+		}
+		allAllowed = allAllowed && allowed
+		decisions[i] = ratelimit.Decision{
+			Allowed:    allowed,
+			Limit:      tb.burst,
+			Remaining:  flooredTokens(tokens),
+			RetryAfter: time.Duration(retryAfterSeconds * float64(time.Second)),
+		}
+	}
+
+	return decisions, allAllowed, nil
+}
+
+// parseRow unpacks one { allowed, tokens, retry_after } triple. tokens
+// and retry_after are returned as strings (see tokenbucket.lua for why)
+// and parsed back into float64 here.
+func parseRow(allowedField, tokensField, retryField any) (allowed bool, tokens, retryAfterSeconds float64, err error) {
+	allowedN, ok := allowedField.(int64)
 	if !ok {
-		return false, 0, 0, fmt.Errorf("unexpected 'tokens' field: %#v", row[1])
+		return false, 0, 0, fmt.Errorf("unexpected 'allowed' field: %#v", allowedField)
+	}
+
+	tokensStr, ok := tokensField.(string)
+	if !ok {
+		return false, 0, 0, fmt.Errorf("unexpected 'tokens' field: %#v", tokensField)
 	}
 	tokens, err = strconv.ParseFloat(tokensStr, 64)
 	if err != nil {
 		return false, 0, 0, fmt.Errorf("parsing tokens: %w", err)
 	}
 
-	retryStr, ok := row[2].(string)
+	retryStr, ok := retryField.(string)
 	if !ok {
-		return false, 0, 0, fmt.Errorf("unexpected 'retry_after' field: %#v", row[2])
+		return false, 0, 0, fmt.Errorf("unexpected 'retry_after' field: %#v", retryField)
 	}
 	retryAfterSeconds, err = strconv.ParseFloat(retryStr, 64)
 	if err != nil {
