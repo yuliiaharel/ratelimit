@@ -22,15 +22,73 @@ var tokenBucketScriptSrc string
 //go:embed tokenbucketbatch.lua
 var tokenBucketBatchScriptSrc string
 
+//go:embed tokenbucketbatchpolicy.lua
+var tokenBucketBatchPolicyScriptSrc string
+
 var (
-	tokenBucketScript      = redis.NewScript(tokenBucketScriptSrc)
-	tokenBucketBatchScript = redis.NewScript(tokenBucketBatchScriptSrc)
+	tokenBucketScript            = redis.NewScript(tokenBucketScriptSrc)
+	tokenBucketBatchScript       = redis.NewScript(tokenBucketBatchScriptSrc)
+	tokenBucketBatchPolicyScript = redis.NewScript(tokenBucketBatchPolicyScriptSrc)
 )
 
 // tokenEpsilon mirrors memory.TokenBucket's: it absorbs floating-point
 // error from the refill arithmetic (here done in Lua, not Go) so a
 // bucket that should read as exactly N tokens doesn't read as N-ε.
 const tokenEpsilon = 1e-9
+
+// Policy is one domain's token bucket configuration: how fast it
+// refills, how large a burst it allows, and how much of that burst is
+// reserved for higher-priority traffic as the bucket drains.
+//
+// ReserveForCritical and ReserveForDefault are fractions of Burst
+// (0..1): Critical traffic may always drain the bucket to empty (its
+// floor is always 0); Default may drain it down to
+// Burst*ReserveForCritical; Sheddable down to
+// Burst*(ReserveForCritical+ReserveForDefault). Once the bucket is
+// below a priority's floor, only strictly-higher-priority traffic
+// keeps getting through -- that's the mechanism behind "shed
+// sheddable traffic before critical traffic" under pressure. Leave
+// both at 0 (the default) for no reservation: every priority can drain
+// the bucket fully, same as if Priority didn't exist.
+type Policy struct {
+	Rate               float64
+	Burst              int
+	ReserveForCritical float64
+	ReserveForDefault  float64
+}
+
+// Validate reports whether p is well-formed.
+func (p Policy) Validate() error {
+	if p.Rate <= 0 {
+		return errors.New("redisstore: Policy rate must be positive")
+	}
+	if p.Burst <= 0 {
+		return errors.New("redisstore: Policy burst must be positive")
+	}
+	if p.ReserveForCritical < 0 || p.ReserveForCritical > 1 {
+		return errors.New("redisstore: Policy ReserveForCritical must be between 0 and 1")
+	}
+	if p.ReserveForDefault < 0 || p.ReserveForDefault > 1 {
+		return errors.New("redisstore: Policy ReserveForDefault must be between 0 and 1")
+	}
+	if p.ReserveForCritical+p.ReserveForDefault > 1 {
+		return errors.New("redisstore: Policy ReserveForCritical + ReserveForDefault must not exceed 1")
+	}
+	return nil
+}
+
+// floorFor returns the minimum tokens a request of the given priority
+// must leave behind in the bucket.
+func (p Policy) floorFor(priority ratelimit.Priority) float64 {
+	switch priority {
+	case ratelimit.PriorityCritical:
+		return 0
+	case ratelimit.PrioritySheddable:
+		return float64(p.Burst) * (p.ReserveForCritical + p.ReserveForDefault)
+	default: // PriorityDefault, and the zero value
+		return float64(p.Burst) * p.ReserveForCritical
+	}
+}
 
 // TokenBucketConfig configures a TokenBucket limiter.
 type TokenBucketConfig struct {
@@ -45,6 +103,12 @@ type TokenBucketConfig struct {
 	// A fresh key starts with a full bucket.
 	Burst int
 
+	// ReserveForCritical and ReserveForDefault reserve headroom for
+	// higher-priority requests as the bucket drains. See Policy for
+	// what they mean; both default to 0 (no reservation).
+	ReserveForCritical float64
+	ReserveForDefault  float64
+
 	// KeyPrefix namespaces every Redis key this limiter touches, so it
 	// can share one Redis instance with other data without clobbering
 	// it. Defaults to "ratelimit:tb:".
@@ -58,8 +122,7 @@ type TokenBucketConfig struct {
 // way separate GET/SET calls would.
 type TokenBucket struct {
 	client    *redis.Client
-	rate      float64
-	burst     int
+	policy    Policy
 	keyPrefix string
 	ttl       time.Duration
 }
@@ -71,11 +134,14 @@ func NewTokenBucket(cfg TokenBucketConfig) (*TokenBucket, error) {
 	if cfg.Client == nil {
 		return nil, errors.New("redisstore: TokenBucket client must not be nil")
 	}
-	if cfg.Rate <= 0 {
-		return nil, errors.New("redisstore: TokenBucket rate must be positive")
+	policy := Policy{
+		Rate:               cfg.Rate,
+		Burst:              cfg.Burst,
+		ReserveForCritical: cfg.ReserveForCritical,
+		ReserveForDefault:  cfg.ReserveForDefault,
 	}
-	if cfg.Burst <= 0 {
-		return nil, errors.New("redisstore: TokenBucket burst must be positive")
+	if err := policy.Validate(); err != nil {
+		return nil, err
 	}
 	keyPrefix := cfg.KeyPrefix
 	if keyPrefix == "" {
@@ -84,8 +150,7 @@ func NewTokenBucket(cfg TokenBucketConfig) (*TokenBucket, error) {
 
 	return &TokenBucket{
 		client:    cfg.Client,
-		rate:      cfg.Rate,
-		burst:     cfg.Burst,
+		policy:    policy,
 		keyPrefix: keyPrefix,
 		ttl:       idleTTL(cfg.Rate, cfg.Burst),
 	}, nil
@@ -110,13 +175,14 @@ func (tb *TokenBucket) Allow(ctx context.Context, req ratelimit.Request) (rateli
 		return ratelimit.Decision{}, err
 	}
 	cost := req.EffectiveCost()
-	if cost > tb.burst {
-		return ratelimit.Decision{Limit: tb.burst}, ratelimit.ErrCostExceedsLimit
+	if cost > tb.policy.Burst {
+		return ratelimit.Decision{Limit: tb.policy.Burst}, ratelimit.ErrCostExceedsLimit
 	}
 
 	key := tb.keyPrefix + req.Key
+	floor := tb.policy.floorFor(req.Priority)
 	res, err := tokenBucketScript.Run(ctx, tb.client, []string{key},
-		tb.rate, tb.burst, cost, int(tb.ttl.Seconds()),
+		tb.policy.Rate, tb.policy.Burst, cost, int(tb.ttl.Seconds()), floor,
 	).Result()
 	if err != nil {
 		return ratelimit.Decision{}, fmt.Errorf("redisstore: %w", err)
@@ -133,7 +199,7 @@ func (tb *TokenBucket) Allow(ctx context.Context, req ratelimit.Request) (rateli
 
 	return ratelimit.Decision{
 		Allowed:    allowed,
-		Limit:      tb.burst,
+		Limit:      tb.policy.Burst,
 		Remaining:  flooredTokens(tokensRemaining),
 		RetryAfter: time.Duration(retryAfterSeconds * float64(time.Second)),
 	}, nil
@@ -149,18 +215,18 @@ func (tb *TokenBucket) AllowBatch(ctx context.Context, reqs []ratelimit.Request)
 	}
 
 	keys := make([]string, len(reqs))
-	args := make([]any, 3, 3+len(reqs))
-	args[0], args[1], args[2] = tb.rate, tb.burst, int(tb.ttl.Seconds())
+	args := make([]any, 3, 3+2*len(reqs))
+	args[0], args[1], args[2] = tb.policy.Rate, tb.policy.Burst, int(tb.ttl.Seconds())
 	for i, req := range reqs {
 		if err := req.Validate(); err != nil {
 			return nil, false, err
 		}
 		cost := req.EffectiveCost()
-		if cost > tb.burst {
+		if cost > tb.policy.Burst {
 			return nil, false, ratelimit.ErrCostExceedsLimit
 		}
 		keys[i] = tb.keyPrefix + req.Key
-		args = append(args, cost)
+		args = append(args, cost, tb.policy.floorFor(req.Priority))
 	}
 
 	res, err := tokenBucketBatchScript.Run(ctx, tb.client, keys, args...).Result()
@@ -183,7 +249,82 @@ func (tb *TokenBucket) AllowBatch(ctx context.Context, reqs []ratelimit.Request)
 		allAllowed = allAllowed && allowed
 		decisions[i] = ratelimit.Decision{
 			Allowed:    allowed,
-			Limit:      tb.burst,
+			Limit:      tb.policy.Burst,
+			Remaining:  flooredTokens(tokens),
+			RetryAfter: time.Duration(retryAfterSeconds * float64(time.Second)),
+		}
+	}
+
+	return decisions, allAllowed, nil
+}
+
+// PolicyCheck is one entry in a cross-policy atomic batch (see
+// AllowBatchAcrossPolicies).
+type PolicyCheck struct {
+	Key      string
+	Cost     int
+	Priority ratelimit.Priority
+	Policy   Policy
+}
+
+// AllowBatchAcrossPolicies checks every entry atomically together,
+// even though each one may belong to a different domain's Policy: all
+// of them succeed, or none of them do, and tokens are only consumed
+// when they all do.
+//
+// Unlike TokenBucket.AllowBatch (one shared Rate/Burst for the whole
+// batch), each entry here carries its own Policy, which is what makes
+// it possible to batch checks across domains with different limits in
+// one atomic round trip. keyPrefix namespaces keys the same way
+// TokenBucketConfig.KeyPrefix does; pass "" for no prefix.
+func AllowBatchAcrossPolicies(
+	ctx context.Context, client *redis.Client, keyPrefix string, entries []PolicyCheck,
+) ([]ratelimit.Decision, bool, error) {
+	if len(entries) == 0 {
+		return nil, true, nil
+	}
+
+	keys := make([]string, len(entries))
+	args := make([]any, 0, 5*len(entries))
+	for i, e := range entries {
+		if err := e.Policy.Validate(); err != nil {
+			return nil, false, err
+		}
+		req := ratelimit.Request{Key: e.Key, Cost: e.Cost, Priority: e.Priority}
+		if err := req.Validate(); err != nil {
+			return nil, false, err
+		}
+		cost := req.EffectiveCost()
+		if cost > e.Policy.Burst {
+			return nil, false, ratelimit.ErrCostExceedsLimit
+		}
+
+		keys[i] = keyPrefix + e.Key
+		args = append(args, cost, e.Policy.Rate, e.Policy.Burst, e.Policy.floorFor(e.Priority),
+			int(idleTTL(e.Policy.Rate, e.Policy.Burst).Seconds()))
+	}
+
+	res, err := tokenBucketBatchPolicyScript.Run(ctx, client, keys, args...).Result()
+	if err != nil {
+		return nil, false, fmt.Errorf("redisstore: %w", err)
+	}
+
+	rows, ok := res.([]any)
+	if !ok || len(rows) != len(entries)*3 {
+		return nil, false, fmt.Errorf("redisstore: unexpected batch script result: %#v", res)
+	}
+
+	decisions := make([]ratelimit.Decision, len(entries))
+	allAllowed := true
+	for i, e := range entries {
+		allowed, tokens, retryAfterSeconds, perr := parseRow(rows[i*3], rows[i*3+1], rows[i*3+2])
+		if perr != nil {
+			return nil, false, fmt.Errorf("redisstore: %w", perr)
+		}
+		allAllowed = allAllowed && allowed
+		decisions[i] = ratelimit.Decision{
+			Allowed:    allowed,
+			Limit:      e.Policy.Burst,
 			Remaining:  flooredTokens(tokens),
 			RetryAfter: time.Duration(retryAfterSeconds * float64(time.Second)),
 		}

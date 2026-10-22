@@ -7,29 +7,33 @@ import (
 	"fmt"
 
 	"connectrpc.com/connect"
+	"github.com/redis/go-redis/v9"
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	"github.com/yuliiaharel/ratelimit"
 	ratelimitv1 "github.com/yuliiaharel/ratelimit/gen/ratelimit/v1"
 	"github.com/yuliiaharel/ratelimit/gen/ratelimit/v1/ratelimitv1connect"
+	"github.com/yuliiaharel/ratelimit/policy"
 	"github.com/yuliiaharel/ratelimit/redisstore"
 )
 
-// Server implements ratelimitv1connect.RateLimitServiceHandler.
-//
-// Every domain shares one token bucket policy for now (Rate/Burst
-// configured on tb) -- there's no per-domain policy lookup yet; that's
-// roadmap step 8. PolicyId on every response is a fixed placeholder
-// ("default") until then.
+// Server implements ratelimitv1connect.RateLimitServiceHandler. Each
+// domain's Rate/Burst/priority reservation comes from policies, looked
+// up fresh on every request -- so a policy hot-reload takes effect on
+// the very next call, with no per-domain state in Server itself to
+// invalidate.
 type Server struct {
-	tb *redisstore.TokenBucket
+	client    *redis.Client
+	policies  *policy.Store
+	keyPrefix string
 }
 
 var _ ratelimitv1connect.RateLimitServiceHandler = (*Server)(nil)
 
-// NewServer returns a Server backed by tb.
-func NewServer(tb *redisstore.TokenBucket) *Server {
-	return &Server{tb: tb}
+// NewServer returns a Server backed by client, looking up each
+// request's policy from policies.
+func NewServer(client *redis.Client, policies *policy.Store) *Server {
+	return &Server{client: client, policies: policies, keyPrefix: "ratelimit:tb:"}
 }
 
 // ShouldAllow checks a single key.
@@ -41,20 +45,35 @@ func (s *Server) ShouldAllow(
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("service: key is required"))
 	}
 
-	d, err := s.tb.Allow(ctx, ratelimit.Request{
-		Key:  compositeKey(msg.GetDomain(), msg.GetKey()),
-		Cost: int(msg.GetCost()),
+	p, policyName := s.policies.Lookup(msg.GetDomain())
+	tb, err := redisstore.NewTokenBucket(redisstore.TokenBucketConfig{
+		Client:             s.client,
+		Rate:               p.Rate,
+		Burst:              p.Burst,
+		ReserveForCritical: p.ReserveForCritical,
+		ReserveForDefault:  p.ReserveForDefault,
+		KeyPrefix:          s.keyPrefix,
+	})
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("service: building limiter for policy %q: %w", policyName, err))
+	}
+
+	d, err := tb.Allow(ctx, ratelimit.Request{
+		Key:      compositeKey(msg.GetDomain(), msg.GetKey()),
+		Cost:     int(msg.GetCost()),
+		Priority: priorityFromProto(msg.GetPriority()),
 	})
 	if err != nil {
 		return nil, toConnectError(err)
 	}
 
-	return connect.NewResponse(decisionToProto(d)), nil
+	return connect.NewResponse(decisionToProto(d, policyName)), nil
 }
 
-// ShouldAllowBatch checks every key in req.Checks atomically together:
-// the request is allowed only if every check passes, and tokens are
-// consumed only when all of them do.
+// ShouldAllowBatch checks every key in req.Checks atomically together,
+// even across domains with different policies: the request is allowed
+// only if every check passes, and tokens are consumed only when all
+// of them do.
 func (s *Server) ShouldAllowBatch(
 	ctx context.Context, req *connect.Request[ratelimitv1.ShouldAllowBatchRequest],
 ) (*connect.Response[ratelimitv1.ShouldAllowBatchResponse], error) {
@@ -63,23 +82,36 @@ func (s *Server) ShouldAllowBatch(
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("service: at least one check is required"))
 	}
 
-	reqs := make([]ratelimit.Request, len(checks))
+	entries := make([]redisstore.PolicyCheck, len(checks))
+	policyNames := make([]string, len(checks))
 	for i, c := range checks {
 		if c.GetKey() == "" {
 			return nil, connect.NewError(connect.CodeInvalidArgument,
 				fmt.Errorf("service: check %d: key is required", i))
 		}
-		reqs[i] = ratelimit.Request{Key: compositeKey(c.GetDomain(), c.GetKey()), Cost: int(c.GetCost())}
+		p, policyName := s.policies.Lookup(c.GetDomain())
+		policyNames[i] = policyName
+		entries[i] = redisstore.PolicyCheck{
+			Key:      compositeKey(c.GetDomain(), c.GetKey()),
+			Cost:     int(c.GetCost()),
+			Priority: priorityFromProto(c.GetPriority()),
+			Policy: redisstore.Policy{
+				Rate:               p.Rate,
+				Burst:              p.Burst,
+				ReserveForCritical: p.ReserveForCritical,
+				ReserveForDefault:  p.ReserveForDefault,
+			},
+		}
 	}
 
-	decisions, allowed, err := s.tb.AllowBatch(ctx, reqs)
+	decisions, allowed, err := redisstore.AllowBatchAcrossPolicies(ctx, s.client, s.keyPrefix, entries)
 	if err != nil {
 		return nil, toConnectError(err)
 	}
 
 	results := make([]*ratelimitv1.ShouldAllowResponse, len(decisions))
 	for i, d := range decisions {
-		results[i] = decisionToProto(d)
+		results[i] = decisionToProto(d, policyNames[i])
 	}
 
 	return connect.NewResponse(&ratelimitv1.ShouldAllowBatchResponse{
@@ -96,7 +128,22 @@ func compositeKey(domain, key string) string {
 	return domain + ":" + key
 }
 
-func decisionToProto(d ratelimit.Decision) *ratelimitv1.ShouldAllowResponse {
+// priorityFromProto maps the wire enum onto the core package's type.
+// PRIORITY_UNSPECIFIED and PRIORITY_DEFAULT both map to
+// ratelimit.PriorityDefault, matching Priority's own documented
+// zero-value convention.
+func priorityFromProto(p ratelimitv1.Priority) ratelimit.Priority {
+	switch p {
+	case ratelimitv1.Priority_PRIORITY_CRITICAL:
+		return ratelimit.PriorityCritical
+	case ratelimitv1.Priority_PRIORITY_SHEDDABLE:
+		return ratelimit.PrioritySheddable
+	default:
+		return ratelimit.PriorityDefault
+	}
+}
+
+func decisionToProto(d ratelimit.Decision, policyName string) *ratelimitv1.ShouldAllowResponse {
 	reason := ratelimitv1.ShouldAllowResponse_REASON_OK
 	if !d.Allowed {
 		reason = ratelimitv1.ShouldAllowResponse_REASON_OVER_LIMIT
@@ -107,7 +154,7 @@ func decisionToProto(d ratelimit.Decision) *ratelimitv1.ShouldAllowResponse {
 		Limit:      uint32(d.Limit),
 		Remaining:  uint32(d.Remaining),
 		RetryAfter: durationpb.New(d.RetryAfter),
-		PolicyId:   "default",
+		PolicyId:   policyName,
 	}
 }
 

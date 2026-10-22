@@ -2,21 +2,25 @@ package client
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/redis/go-redis/v9"
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 
 	"github.com/yuliiaharel/ratelimit/gen/ratelimit/v1/ratelimitv1connect"
-	"github.com/yuliiaharel/ratelimit/redisstore"
+	"github.com/yuliiaharel/ratelimit/policy"
 	"github.com/yuliiaharel/ratelimit/service"
 )
 
 // newTestClient starts a real Redis container and a RateLimitService
-// on top of it, and returns a Client pointed at it. Skipped, not
-// failed, if Docker isn't available.
+// on top of it (every domain sharing one policy of rate/burst), and
+// returns a Client pointed at it. Skipped, not failed, if Docker isn't
+// available.
 func newTestClient(t *testing.T, rate float64, burst int) *Client {
 	t.Helper()
 	ctx := context.Background()
@@ -42,13 +46,18 @@ func newTestClient(t *testing.T, rate float64, burst int) *Client {
 	redisClient := redis.NewClient(opts)
 	t.Cleanup(func() { _ = redisClient.Close() })
 
-	tb, err := redisstore.NewTokenBucket(redisstore.TokenBucketConfig{Client: redisClient, Rate: rate, Burst: burst})
+	policyPath := filepath.Join(t.TempDir(), "policies.yaml")
+	content := fmt.Sprintf("default:\n  rate: %v\n  burst: %d\n", rate, burst)
+	if err := os.WriteFile(policyPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	policies, err := policy.Load(policyPath)
 	if err != nil {
-		t.Fatalf("NewTokenBucket: %v", err)
+		t.Fatalf("policy.Load: %v", err)
 	}
 
 	mux := http.NewServeMux()
-	path, handler := ratelimitv1connect.NewRateLimitServiceHandler(service.NewServer(tb))
+	path, handler := ratelimitv1connect.NewRateLimitServiceHandler(service.NewServer(redisClient, policies))
 	mux.Handle(path, handler)
 
 	srv := httptest.NewServer(mux)

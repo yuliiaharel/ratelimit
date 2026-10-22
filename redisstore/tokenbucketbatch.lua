@@ -1,11 +1,14 @@
--- Atomic multi-key token bucket check-and-consume: every key must have
--- enough tokens, or none of them are charged.
+-- Atomic multi-key token bucket check-and-consume, one shared policy:
+-- every key must have enough tokens (after accounting for its
+-- request's priority floor), or none of them are charged.
 --
--- KEYS[1..N]   = bucket keys
--- ARGV[1]      = rate  (tokens added per second, shared by every key)
--- ARGV[2]      = burst (bucket capacity, shared by every key)
--- ARGV[3]      = ttl   (seconds)
--- ARGV[4..N+3] = cost for KEYS[1..N], same order
+-- KEYS[1..N] = bucket keys
+-- ARGV[1]    = rate  (tokens added per second, shared by every key)
+-- ARGV[2]    = burst (bucket capacity, shared by every key)
+-- ARGV[3]    = ttl   (seconds)
+-- For each i in 1..N, two consecutive ARGV entries starting at 3+2*(i-1):
+--   cost for KEYS[i]
+--   floor for KEYS[i] (see tokenbucket.lua for what floor means)
 --
 -- Returns a flat array of N groups of
 -- { allowed (0/1), tokens_remaining, retry_after_seconds }
@@ -26,13 +29,17 @@ local now = tonumber(time[1]) + tonumber(time[2]) / 1e6
 
 local tokens = {}
 local costs = {}
+local floors = {}
 local all_ok = true
 
 for i = 1, n do
-  local key = KEYS[i]
-  local cost = tonumber(ARGV[3 + i])
+  local base = 3 + 2 * (i - 1)
+  local cost = tonumber(ARGV[base + 1])
+  local floor = tonumber(ARGV[base + 2])
   costs[i] = cost
+  floors[i] = floor
 
+  local key = KEYS[i]
   local data = redis.call('HMGET', key, 'tokens', 'ts')
   local tok, last
   if data[1] == false then
@@ -45,7 +52,7 @@ for i = 1, n do
   tok = math.min(burst, tok + math.max(0, now - last) * rate)
   tokens[i] = tok
 
-  if tok < cost then
+  if (tok - cost) < floor then
     all_ok = false
   end
 end
@@ -55,19 +62,22 @@ for i = 1, n do
   local key = KEYS[i]
   local tok = tokens[i]
   local cost = costs[i]
+  local floor = floors[i]
   local allowed = 0
   local retry_after = 0
 
   if all_ok then
     tok = tok - cost
     allowed = 1
-  elseif tok < cost then
-    retry_after = (cost - tok) / rate
+  elseif (tok - cost) < floor then
+    local deficit = cost + floor - tok
+    if deficit < 0 then deficit = 0 end
+    retry_after = deficit / rate
   end
-  -- else: this key alone had enough, but a sibling check failed the
-  -- batch, so allowed stays 0 and retry_after stays 0 -- it's not
-  -- *this* key's shortfall; the caller should look at the other
-  -- results to see which one was.
+  -- else: this key alone had enough (even after its own floor), but a
+  -- sibling check failed the batch, so allowed stays 0 and retry_after
+  -- stays 0 -- it's not *this* key's shortfall; the caller should look
+  -- at the other results to see which one was.
 
   redis.call('HMSET', key, 'tokens', tok, 'ts', now)
   redis.call('EXPIRE', key, ttl)

@@ -122,15 +122,23 @@ skew between app servers directly skew the limit.
 
 ### Cost and priority
 
-Cost: `ShouldAllowRequest.cost` flows straight into the same `Request.Cost` /
+**Cost**: `ShouldAllowRequest.cost` flows straight into the same `Request.Cost` /
 `EffectiveCost()` every limiter already uses -- a cost-N request consumes N tokens
 in one atomic check, the same whether it's checked via the Go `Limiter` interface,
 a gRPC interceptor, or RateLimitService over HTTP/JSON.
 
-_TODO: priority is accepted end-to-end (proto, client, server) but not yet acted
-on -- every domain shares one uniform bucket regardless of priority. Reserved
-headroom for critical traffic, so sheddable traffic hits its limit first, is
-roadmap step 8._
+**Priority**: each `redisstore.Policy` reserves a fraction of its bucket for
+higher-priority traffic as it drains, via `ReserveForCritical` and
+`ReserveForDefault` (both fractions of `Burst`, 0..1). A request's *floor* --
+the minimum tokens its priority must leave behind -- is 0 for Critical,
+`Burst*ReserveForCritical` for Default, and `Burst*(ReserveForCritical+ReserveForDefault)`
+for Sheddable. Once the bucket drains below a priority's floor, only strictly
+higher-priority traffic keeps getting through: that's the whole mechanism behind
+"shed sheddable traffic before critical traffic." It's enforced inside the same
+atomic Lua script as the refill-and-check (`floor` is just one more parameter),
+so there's no separate accounting to keep in sync. Leave both reserves at 0 (the
+default) for no reservation -- every priority can drain the bucket fully, same as
+if Priority didn't exist.
 
 ### Streaming RPCs
 
@@ -161,7 +169,44 @@ _TODO: latency budget for the extra network hop; a client-side local token cache
 to avoid a call per request entirely (roadmap step 9)._
 
 ### Policies
-_TODO: YAML policy config keyed by domain; hot reload without restart; what happens to in-flight counters when a limit changes._
+
+`policies.yaml`, loaded by `policy.Load` and looked up fresh on every request --
+not cached per-domain in `Server` -- so a hot reload takes effect on the very
+next call, with no server-side state to invalidate:
+
+```yaml
+policies:
+  api:
+    rate: 10
+    burst: 20
+    reserve_for_critical: 0.3
+    reserve_for_default: 0.2
+  send-message:
+    rate: 2
+    burst: 5
+    reserve_for_critical: 0.5
+
+default:            # applied to any domain with no entry above
+  rate: 5
+  burst: 10
+```
+
+`policy.Store.Watch` reloads on any write to the file (watching its parent
+directory, not the file itself, since many editors and config-management tools
+replace a file via rename rather than writing it in place -- a watch on the file
+alone can miss that). A reload that fails to parse or validate is logged and
+discarded: the `Store` keeps serving its last good snapshot rather than falling
+back to a placeholder policy for every domain over one bad edit.
+
+**What happens to in-flight counters when a limit changes**: nothing has to,
+by design. Redis holds each key's raw token count, not "tokens as a fraction
+of the configured burst" -- so a policy change just changes what that count
+means going forward, with no migration needed. The one sharp edge: the Lua
+script clamps `tokens` to `burst` on every access (`math.min(burst, ...)`), so
+lowering `Burst` below a key's current count caps it down to the new ceiling
+immediately, on its very next request -- not gradually. A caller that had
+built up a large burst loses that headroom in one step the moment the new
+policy takes effect, rather than spending it down first.
 
 ### Failure modes
 _TODO: Redis or RateLimitService unavailable → fail-open (availability) vs. fail-closed (protection), per domain. Timeouts, circuit breaking._
@@ -208,7 +253,7 @@ Each step is sized for one ~45-minute session.
 
 **Service**
 - [x] **7. RateLimitService**: `.proto`, `buf generate`, connect-go server backed by Redis, Go client
-- [ ] **8. Priority + policies**: criticality-aware shedding, YAML policies per domain with hot reload
+- [x] **8. Priority + policies**: criticality-aware shedding, YAML policies per domain with hot reload
 - [ ] **9. Failure modes + load test**: fail-open/closed per domain, timeouts, client-side fallback, load harness, results in README
 - [ ] **10. Polish**: fill in Design sections, diagrams, release `v0.1.0`, write the post
 
@@ -226,6 +271,7 @@ Each step is sized for one ~45-minute session.
 ├── proto/ratelimit/v1/      # service API
 ├── gen/                     # generated code (buf)
 ├── service/                 # RateLimitService server
+├── policy/                  # YAML policy loading + hot reload
 ├── client/                  # Go client with local cache + fallback
 ├── cmd/
 │   ├── ratelimitd/          # the service binary
