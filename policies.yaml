@@ -1,0 +1,22 @@
+# Per-domain rate-limit policies for RateLimitService. Reloaded
+# automatically when this file changes -- no restart needed.
+#
+# reserve_for_critical and reserve_for_default are fractions (0..1) of
+# burst reserved for higher-priority traffic as the bucket drains: see
+# redisstore.Policy for exactly what they mean. Both default to 0 (no
+# reservation) if omitted.
+policies:
+  api:
+    rate: 10
+    burst: 20
+    reserve_for_critical: 0.3
+    reserve_for_default: 0.2
+  send-message:
+    rate: 2
+    burst: 5
+    reserve_for_critical: 0.5
+
+# Applied to any domain with no entry above.
+default:
+  rate: 5
+  burst: 10
