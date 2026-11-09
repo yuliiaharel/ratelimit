@@ -102,10 +102,23 @@ _TODO: one paragraph + diagram per algorithm._
 ## Design
 
 ### Atomicity in Redis
-_TODO: why a Lua script instead of GET/SET, and what the script does._
+
+`redisstore.TokenBucket` runs the whole read-refill-check-write sequence as one Lua
+script (`redisstore/tokenbucket.lua`), not separate GET/SET calls. Redis runs a
+script to completion before serving any other command, so two clients racing for
+the last token can't both win the way they could with a read-modify-write over
+separate round trips. `TestTokenBucketIntegration`'s concurrent-key test exercises
+this directly: 50 goroutines hit one key against a real Redis container, and
+exactly `Burst` of them win, every time.
 
 ### Time source
-_TODO: whose clock wins — app server or Redis `TIME`? Trade-offs with clock skew._
+
+Redis's own `TIME` command, not a timestamp the caller computed. Every app server
+calling the same Redis agrees on "now" from one source, so their clocks don't need
+to agree with each other -- only with Redis's. The cost is one more thing a client
+can't fake or inject for testing (the in-memory limiters' `Clock` interface doesn't
+apply here); the alternative, trusting each caller's own clock, would let clock
+skew between app servers directly skew the limit.
 
 ### Cost and priority
 _TODO: how cost consumes tokens; how sheddable traffic gets a lower effective limit (reserved headroom for critical)._
@@ -174,7 +187,7 @@ Each step is sized for one ~45-minute session.
 - [x] **3. Sliding windows**: log and counter variants; a test comparing accuracy against fixed window at window edges
 - [ ] **4. Concurrency**: sharded locks, `-race` stress test, first benchmarks
 - [x] **5. gRPC interceptors**: unary + streaming, `RESOURCE_EXHAUSTED` with `RetryInfo`, key extraction from metadata, example server
-- [ ] **6. Redis backend**: token bucket in Lua, `docker-compose`, integration tests (testcontainers)
+- [x] **6. Redis backend**: token bucket in Lua, `docker-compose`, integration tests (testcontainers)
 
 **Service**
 - [ ] **7. RateLimitService**: `.proto`, `buf generate`, connect-go server backed by Redis, Go client
