@@ -1,12 +1,12 @@
 // Command ratelimitd runs RateLimitService as a standalone HTTP
-// server, backed by Redis.
+// server, backed by Redis. Per-domain limits come from a policy file,
+// reloaded automatically when it changes -- no restart needed.
 //
 // Configure via environment variables:
 //
-//	REDIS_ADDR   Redis address (default "localhost:6379")
-//	RATE         tokens added per second, shared by every domain for now (default 10)
-//	BURST        bucket capacity (default 20)
-//	ADDR         address to listen on (default ":8080")
+//	REDIS_ADDR     Redis address (default "localhost:6379")
+//	POLICIES_PATH  path to the policy YAML file (default "policies.yaml")
+//	ADDR           address to listen on (default ":8080")
 //
 // Run it (with Redis up via `docker compose up -d`):
 //
@@ -21,37 +21,44 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
-	"strconv"
 
 	"github.com/redis/go-redis/v9"
 
 	"github.com/yuliiaharel/ratelimit/gen/ratelimit/v1/ratelimitv1connect"
-	"github.com/yuliiaharel/ratelimit/redisstore"
+	"github.com/yuliiaharel/ratelimit/policy"
 	"github.com/yuliiaharel/ratelimit/service"
 )
 
 func main() {
 	redisAddr := getEnv("REDIS_ADDR", "localhost:6379")
-	rate := getEnvFloat("RATE", 10)
-	burst := getEnvInt("BURST", 20)
+	policiesPath := getEnv("POLICIES_PATH", "policies.yaml")
 	addr := getEnv("ADDR", ":8080")
 
 	client := redis.NewClient(&redis.Options{Addr: redisAddr})
 	defer func() { _ = client.Close() }()
 
-	tb, err := redisstore.NewTokenBucket(redisstore.TokenBucketConfig{Client: client, Rate: rate, Burst: burst})
+	policies, err := policy.Load(policiesPath)
 	if err != nil {
-		log.Fatalf("NewTokenBucket: %v", err)
+		log.Fatalf("loading policies from %s: %v", policiesPath, err)
 	}
 
+	watchCtx, cancelWatch := context.WithCancel(context.Background())
+	defer cancelWatch()
+	go func() {
+		if err := policies.Watch(watchCtx); err != nil {
+			log.Printf("policy watcher stopped: %v", err)
+		}
+	}()
+
 	mux := http.NewServeMux()
-	path, handler := ratelimitv1connect.NewRateLimitServiceHandler(service.NewServer(tb))
+	path, handler := ratelimitv1connect.NewRateLimitServiceHandler(service.NewServer(client, policies))
 	mux.Handle(path, handler)
 
-	log.Printf("ratelimitd listening on %s (redis=%s rate=%v/s burst=%d)", addr, redisAddr, rate, burst)
+	log.Printf("ratelimitd listening on %s (redis=%s policies=%s)", addr, redisAddr, policiesPath)
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatalf("serve: %v", err)
 	}
@@ -60,24 +67,6 @@ func main() {
 func getEnv(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
-	}
-	return def
-}
-
-func getEnvFloat(key string, def float64) float64 {
-	if v := os.Getenv(key); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			return f
-		}
-	}
-	return def
-}
-
-func getEnvInt(key string, def int) int {
-	if v := os.Getenv(key); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
 	}
 	return def
 }
