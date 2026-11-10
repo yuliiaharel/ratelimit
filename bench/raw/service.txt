@@ -1,0 +1,45 @@
+2026/11/10 13:18:42 github.com/testcontainers/testcontainers-go - Connected to docker: 
+  Server Version: 29.8.2
+  API Version: 1.55
+  Operating System: Docker Desktop
+  Total Memory: 7934 MB
+  Labels:
+    com.docker.desktop.address=unix:///Users/yuliiaharel/Library/Containers/com.docker.docker/Data/docker-cli.sock
+  Testcontainers for Go Version: v0.44.0
+  Resolved Docker Host: unix:///Users/yuliiaharel/.docker/run/docker.sock
+  Resolved Docker Socket Path: /var/run/docker.sock
+  Test SessionID: c8cf29b3c98a50f20344a828abb6425e4226fa0eefb0d42b151f3fd2e6936c43
+  Test ProcessID: 754c6bec-6639-4ccd-9067-cbc6f4b63a4f
+2026/11/10 13:18:42 🐳 Creating container for image redis:7-alpine
+2026/11/10 13:18:42 🐳 Creating container for image testcontainers/ryuk:0.14.0
+2026/11/10 13:18:42 ✅ Container created: 3ba28eb656bc
+2026/11/10 13:18:42 🐳 Starting container: 3ba28eb656bc
+2026/11/10 13:18:42 ✅ Container started: 3ba28eb656bc
+2026/11/10 13:18:42 ⏳ Waiting for container id 3ba28eb656bc image: testcontainers/ryuk:0.14.0. Waiting for: all of: [log message "Started", port 8080/tcp to be listening]
+2026/11/10 13:18:43 Shell not found in container
+2026/11/10 13:18:43 🔔 Container is ready: 3ba28eb656bc
+2026/11/10 13:18:43 ✅ Container created: 460b5f1e0af9
+2026/11/10 13:18:43 🐳 Starting container: 460b5f1e0af9
+2026/11/10 13:18:43 ✅ Container started: 460b5f1e0af9
+2026/11/10 13:18:43 ⏳ Waiting for container id 460b5f1e0af9 image: redis:7-alpine. Waiting for: all of: [port 6379/tcp to be listening, log message "* Ready to accept connections"]
+2026/11/10 13:18:43 🔔 Container is ready: 460b5f1e0af9
+goos: darwin
+goarch: arm64
+pkg: github.com/yuliiaharel/ratelimit/service
+cpu: Apple M5
+BenchmarkShouldAllow/Serial-10         	    8329	    154496 ns/op	    149417 p50-ns	    251708 p99-ns	   28900 B/op	     175 allocs/op
+BenchmarkShouldAllow/Serial-10         	    7580	    148345 ns/op	    145000 p50-ns	    210667 p99-ns	   28721 B/op	     175 allocs/op
+BenchmarkShouldAllow/Serial-10         	    8041	    143929 ns/op	    141084 p50-ns	    191291 p99-ns	   29558 B/op	     175 allocs/op
+BenchmarkShouldAllow/Serial-10         	    7791	    144624 ns/op	    141291 p50-ns	    207333 p99-ns	   29595 B/op	     175 allocs/op
+BenchmarkShouldAllow/Serial-10         	    7878	    143614 ns/op	    141167 p50-ns	    189000 p99-ns	   29103 B/op	     175 allocs/op
+BenchmarkShouldAllow/Parallel-10       	   26976	     47217 ns/op	    461750 p50-ns	    847667 p99-ns	   16675 B/op	     174 allocs/op
+BenchmarkShouldAllow/Parallel-10       	   26371	     45896 ns/op	    459000 p50-ns	    697083 p99-ns	   17281 B/op	     175 allocs/op
+BenchmarkShouldAllow/Parallel-10       	   26480	     54183 ns/op	    493833 p50-ns	   1482375 p99-ns	   17052 B/op	     174 allocs/op
+BenchmarkShouldAllow/Parallel-10       	   25375	     56402 ns/op	    507917 p50-ns	   1415375 p99-ns	   16906 B/op	     174 allocs/op
+BenchmarkShouldAllow/Parallel-10       	   24746	     47837 ns/op	    472792 p50-ns	    785666 p99-ns	   16814 B/op	     174 allocs/op
+2026/11/10 13:18:59 🐳 Stopping container: 460b5f1e0af9
+2026/11/10 13:19:00 ✅ Container stopped: 460b5f1e0af9
+2026/11/10 13:19:00 🐳 Terminating container: 460b5f1e0af9
+2026/11/10 13:19:00 🚫 Container terminated: 460b5f1e0af9
+PASS
+ok  	github.com/yuliiaharel/ratelimit/service	17.636s

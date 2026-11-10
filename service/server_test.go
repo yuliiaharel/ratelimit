@@ -27,7 +27,7 @@ import (
 // fallback), and an httptest server exposing the generated connect
 // handler. Returns a typed client plus the server's base URL (for the
 // plain-JSON test). Skipped, not failed, if Docker isn't available.
-func newTestServer(t *testing.T, rate float64, burst int) (ratelimitv1connect.RateLimitServiceClient, string) {
+func newTestServer(t testing.TB, rate float64, burst int) (ratelimitv1connect.RateLimitServiceClient, string) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -68,7 +68,7 @@ func newTestServer(t *testing.T, rate float64, burst int) (ratelimitv1connect.Ra
 // every domain shares the given rate/burst -- matching the uniform-
 // policy behavior these tests exercise (per-domain policies get their
 // own dedicated tests).
-func newTestPolicies(t *testing.T, rate float64, burst int) *policy.Store {
+func newTestPolicies(t testing.TB, rate float64, burst int) *policy.Store {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "policies.yaml")
 	content := fmt.Sprintf("default:\n  rate: %v\n  burst: %d\n", rate, burst)

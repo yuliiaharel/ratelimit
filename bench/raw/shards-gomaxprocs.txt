@@ -1,0 +1,56 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/yuliiaharel/ratelimit/memory
+cpu: Apple M5
+BenchmarkFixedWindow_ShardCount/shards=1            	23786448	        47.87 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=1            	25383752	        47.53 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=1            	26042467	        47.13 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=1            	25534789	        46.64 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=1            	25278369	        46.48 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=1-2          	11448146	        87.40 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=1-2          	12671516	        98.74 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=1-2          	12126576	        92.50 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=1-2          	12906735	        96.09 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=1-2          	12923113	        89.52 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=1-4          	10305772	       122.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=1-4          	 9955376	       122.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=1-4          	 9435580	       129.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=1-4          	 8188704	       132.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=1-4          	 9717126	       122.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=1-8          	 7989511	       153.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=1-8          	 7626166	       156.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=1-8          	 7724724	       159.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=1-8          	 7135936	       177.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=1-8          	 6386852	       169.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=1-10         	 7192728	       168.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=1-10         	 6752995	       172.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=1-10         	 7082131	       167.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=1-10         	 6799347	       176.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=1-10         	 6993676	       171.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=32           	20296812	        51.35 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=32           	24913429	        48.20 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=32           	25175154	        48.23 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=32           	25042368	        48.06 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=32           	25046832	        48.44 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=32-2         	24375586	        47.65 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=32-2         	25978312	        46.45 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=32-2         	25911187	        48.54 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=32-2         	26069481	        47.09 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=32-2         	25497578	        47.99 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=32-4         	39445731	        32.87 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=32-4         	37336651	        32.76 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=32-4         	36334412	        37.27 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=32-4         	36146982	        33.93 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=32-4         	35943657	        33.50 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=32-8         	31552687	        38.97 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=32-8         	30533088	        38.29 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=32-8         	31412173	        39.78 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=32-8         	29877284	        38.13 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=32-8         	30221244	        38.46 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=32-10        	29691669	        41.31 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=32-10        	26977910	        40.19 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=32-10        	30851798	        40.97 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=32-10        	30965377	        41.54 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=32-10        	29159713	        39.61 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/yuliiaharel/ratelimit/memory	65.268s
