@@ -40,7 +40,7 @@ func TestNewTokenBucketValidation(t *testing.T) {
 // newTestClient starts a real Redis in a container and returns a
 // client connected to it. Tests using it are skipped (not failed) if
 // Docker isn't available, so contributors without it aren't blocked.
-func newTestClient(t *testing.T) *redis.Client {
+func newTestClient(t testing.TB) *redis.Client {
 	t.Helper()
 	ctx := context.Background()
 
