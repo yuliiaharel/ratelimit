@@ -1,0 +1,108 @@
+== memory.txt
+BenchmarkFixedWindow_ShardCount/shards=1-10
+    ns/op: n=5 median=157.7 min=154 max=159.3
+    B/op: n=5 median=0 min=0 max=0
+    allocs/op: n=5 median=0 min=0 max=0
+BenchmarkFixedWindow_ShardCount/shards=32-10
+    ns/op: n=5 median=39.83 min=38.4 max=42
+    B/op: n=5 median=0 min=0 max=0
+    allocs/op: n=5 median=0 min=0 max=0
+BenchmarkFixedWindow/SingleKey-10
+    ns/op: n=5 median=175.8 min=168.3 max=182.2
+    B/op: n=5 median=0 min=0 max=0
+    allocs/op: n=5 median=0 min=0 max=0
+BenchmarkFixedWindow/ManyKeys-10
+    ns/op: n=5 median=40.58 min=39.21 max=40.99
+    B/op: n=5 median=0 min=0 max=0
+    allocs/op: n=5 median=0 min=0 max=0
+BenchmarkTokenBucket/SingleKey-10
+    ns/op: n=5 median=173.7 min=171.1 max=185.6
+    B/op: n=5 median=0 min=0 max=0
+    allocs/op: n=5 median=0 min=0 max=0
+BenchmarkTokenBucket/ManyKeys-10
+    ns/op: n=5 median=43.43 min=40.87 max=44.24
+    B/op: n=5 median=0 min=0 max=0
+    allocs/op: n=5 median=0 min=0 max=0
+BenchmarkSlidingWindowLog/SingleKey-10
+    ns/op: n=5 median=177.2 min=175.8 max=199.2
+    B/op: n=5 median=26 min=26 max=30
+    allocs/op: n=5 median=0 min=0 max=0
+BenchmarkSlidingWindowLog/ManyKeys-10
+    ns/op: n=5 median=67.56 min=61.25 max=75.6
+    B/op: n=5 median=161 min=155 max=177
+    allocs/op: n=5 median=0 min=0 max=0
+BenchmarkSlidingWindowCounter/SingleKey-10
+    ns/op: n=5 median=181.2 min=178 max=185.9
+    B/op: n=5 median=0 min=0 max=0
+    allocs/op: n=5 median=0 min=0 max=0
+BenchmarkSlidingWindowCounter/ManyKeys-10
+    ns/op: n=5 median=47.42 min=45.35 max=50.1
+    B/op: n=5 median=0 min=0 max=0
+    allocs/op: n=5 median=0 min=0 max=0
+== shards-gomaxprocs.txt
+BenchmarkFixedWindow_ShardCount/shards=1
+    ns/op: n=5 median=47.13 min=46.48 max=47.87
+    B/op: n=5 median=0 min=0 max=0
+    allocs/op: n=5 median=0 min=0 max=0
+BenchmarkFixedWindow_ShardCount/shards=1-2
+    ns/op: n=5 median=92.5 min=87.4 max=98.74
+    B/op: n=5 median=0 min=0 max=0
+    allocs/op: n=5 median=0 min=0 max=0
+BenchmarkFixedWindow_ShardCount/shards=1-4
+    ns/op: n=5 median=122.4 min=122.1 max=132
+    B/op: n=5 median=0 min=0 max=0
+    allocs/op: n=5 median=0 min=0 max=0
+BenchmarkFixedWindow_ShardCount/shards=1-8
+    ns/op: n=5 median=159.2 min=153.8 max=177.1
+    B/op: n=5 median=0 min=0 max=0
+    allocs/op: n=5 median=0 min=0 max=0
+BenchmarkFixedWindow_ShardCount/shards=1-10
+    ns/op: n=5 median=171.9 min=167.2 max=176
+    B/op: n=5 median=0 min=0 max=0
+    allocs/op: n=5 median=0 min=0 max=0
+BenchmarkFixedWindow_ShardCount/shards=32
+    ns/op: n=5 median=48.23 min=48.06 max=51.35
+    B/op: n=5 median=0 min=0 max=0
+    allocs/op: n=5 median=0 min=0 max=0
+BenchmarkFixedWindow_ShardCount/shards=32-2
+    ns/op: n=5 median=47.65 min=46.45 max=48.54
+    B/op: n=5 median=0 min=0 max=0
+    allocs/op: n=5 median=0 min=0 max=0
+BenchmarkFixedWindow_ShardCount/shards=32-4
+    ns/op: n=5 median=33.5 min=32.76 max=37.27
+    B/op: n=5 median=0 min=0 max=0
+    allocs/op: n=5 median=0 min=0 max=0
+BenchmarkFixedWindow_ShardCount/shards=32-8
+    ns/op: n=5 median=38.46 min=38.13 max=39.78
+    B/op: n=5 median=0 min=0 max=0
+    allocs/op: n=5 median=0 min=0 max=0
+BenchmarkFixedWindow_ShardCount/shards=32-10
+    ns/op: n=5 median=40.97 min=39.61 max=41.54
+    B/op: n=5 median=0 min=0 max=0
+    allocs/op: n=5 median=0 min=0 max=0
+== redis.txt
+BenchmarkTokenBucket/Serial-10
+    ns/op: n=5 median=102810 min=99720 max=107185
+    B/op: n=5 median=640 min=640 max=640
+    allocs/op: n=5 median=20 min=20 max=20
+BenchmarkTokenBucket/SingleKey-10
+    ns/op: n=5 median=33549 min=33329 max=33777
+    B/op: n=5 median=632 min=632 max=632
+    allocs/op: n=5 median=20 min=20 max=20
+BenchmarkTokenBucket/ManyKeys-10
+    ns/op: n=5 median=33613 min=33503 max=33810
+    B/op: n=5 median=640 min=640 max=640
+    allocs/op: n=5 median=20 min=20 max=20
+== service.txt
+BenchmarkShouldAllow/Serial-10
+    ns/op: n=5 median=144624 min=143614 max=154496
+    p50-ns: n=5 median=141291 min=141084 max=149417
+    p99-ns: n=5 median=207333 min=189000 max=251708
+    B/op: n=5 median=29103 min=28721 max=29595
+    allocs/op: n=5 median=175 min=175 max=175
+BenchmarkShouldAllow/Parallel-10
+    ns/op: n=5 median=47837 min=45896 max=56402
+    p50-ns: n=5 median=472792 min=459000 max=507917
+    p99-ns: n=5 median=847667 min=697083 max=1.48238e+06
+    B/op: n=5 median=16906 min=16675 max=17281
+    allocs/op: n=5 median=174 min=174 max=175

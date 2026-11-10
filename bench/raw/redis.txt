@@ -1,0 +1,50 @@
+2026/11/10 13:18:19 github.com/testcontainers/testcontainers-go - Connected to docker: 
+  Server Version: 29.8.2
+  API Version: 1.55
+  Operating System: Docker Desktop
+  Total Memory: 7934 MB
+  Labels:
+    com.docker.desktop.address=unix:///Users/yuliiaharel/Library/Containers/com.docker.docker/Data/docker-cli.sock
+  Testcontainers for Go Version: v0.44.0
+  Resolved Docker Host: unix:///Users/yuliiaharel/.docker/run/docker.sock
+  Resolved Docker Socket Path: /var/run/docker.sock
+  Test SessionID: b6726a040a66dcba18835140dd1405a08cf112e604d453e64ef3386f57711b3b
+  Test ProcessID: 93ae64fa-71d8-49a7-b2ea-cc36c96200cb
+2026/11/10 13:18:19 🐳 Creating container for image redis:7-alpine
+2026/11/10 13:18:20 🐳 Creating container for image testcontainers/ryuk:0.14.0
+2026/11/10 13:18:20 ✅ Container created: 681e527c9a19
+2026/11/10 13:18:20 🐳 Starting container: 681e527c9a19
+2026/11/10 13:18:20 ✅ Container started: 681e527c9a19
+2026/11/10 13:18:20 ⏳ Waiting for container id 681e527c9a19 image: testcontainers/ryuk:0.14.0. Waiting for: all of: [log message "Started", port 8080/tcp to be listening]
+2026/11/10 13:18:20 Shell not found in container
+2026/11/10 13:18:20 🔔 Container is ready: 681e527c9a19
+2026/11/10 13:18:20 ✅ Container created: aad6eab6935c
+2026/11/10 13:18:20 🐳 Starting container: aad6eab6935c
+2026/11/10 13:18:20 ✅ Container started: aad6eab6935c
+2026/11/10 13:18:20 ⏳ Waiting for container id aad6eab6935c image: redis:7-alpine. Waiting for: all of: [port 6379/tcp to be listening, log message "* Ready to accept connections"]
+2026/11/10 13:18:20 🔔 Container is ready: aad6eab6935c
+goos: darwin
+goarch: arm64
+pkg: github.com/yuliiaharel/ratelimit/redisstore
+cpu: Apple M5
+BenchmarkTokenBucket/Serial-10         	   10946	    107185 ns/op	     640 B/op	      20 allocs/op
+BenchmarkTokenBucket/Serial-10         	   10000	    102909 ns/op	     640 B/op	      20 allocs/op
+BenchmarkTokenBucket/Serial-10         	   10000	    102810 ns/op	     640 B/op	      20 allocs/op
+BenchmarkTokenBucket/Serial-10         	   12027	     99720 ns/op	     640 B/op	      20 allocs/op
+BenchmarkTokenBucket/Serial-10         	   10000	    100013 ns/op	     640 B/op	      20 allocs/op
+BenchmarkTokenBucket/SingleKey-10      	   36370	     33777 ns/op	     632 B/op	      20 allocs/op
+BenchmarkTokenBucket/SingleKey-10      	   35228	     33442 ns/op	     632 B/op	      20 allocs/op
+BenchmarkTokenBucket/SingleKey-10      	   35012	     33329 ns/op	     632 B/op	      20 allocs/op
+BenchmarkTokenBucket/SingleKey-10      	   35832	     33581 ns/op	     632 B/op	      20 allocs/op
+BenchmarkTokenBucket/SingleKey-10      	   35940	     33549 ns/op	     632 B/op	      20 allocs/op
+BenchmarkTokenBucket/ManyKeys-10       	   35517	     33614 ns/op	     640 B/op	      20 allocs/op
+BenchmarkTokenBucket/ManyKeys-10       	   35881	     33810 ns/op	     640 B/op	      20 allocs/op
+BenchmarkTokenBucket/ManyKeys-10       	   35748	     33503 ns/op	     640 B/op	      20 allocs/op
+BenchmarkTokenBucket/ManyKeys-10       	   35470	     33613 ns/op	     640 B/op	      20 allocs/op
+BenchmarkTokenBucket/ManyKeys-10       	   35895	     33597 ns/op	     640 B/op	      20 allocs/op
+2026/11/10 13:18:41 🐳 Stopping container: aad6eab6935c
+2026/11/10 13:18:41 ✅ Container stopped: aad6eab6935c
+2026/11/10 13:18:41 🐳 Terminating container: aad6eab6935c
+2026/11/10 13:18:41 🚫 Container terminated: aad6eab6935c
+PASS
+ok  	github.com/yuliiaharel/ratelimit/redisstore	21.796s

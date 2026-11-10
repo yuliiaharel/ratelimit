@@ -1,0 +1,56 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/yuliiaharel/ratelimit/memory
+cpu: Apple M5
+BenchmarkFixedWindow_ShardCount/shards=1-10         	 7048590	       156.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=1-10         	 7830950	       154.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=1-10         	 7655551	       159.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=1-10         	 7580095	       158.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=1-10         	 7095122	       157.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=32-10        	29385266	        42.00 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=32-10        	31926391	        38.58 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=32-10        	31180608	        38.40 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=32-10        	30766897	        41.92 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow_ShardCount/shards=32-10        	29194357	        39.83 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow/SingleKey-10                   	 7385028	       175.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow/SingleKey-10                   	 7321635	       171.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow/SingleKey-10                   	 7338951	       181.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow/SingleKey-10                   	 6678896	       182.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow/SingleKey-10                   	 7158936	       168.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow/ManyKeys-10                    	30656430	        39.21 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow/ManyKeys-10                    	29895366	        39.42 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow/ManyKeys-10                    	29129601	        40.58 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow/ManyKeys-10                    	30289389	        40.99 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFixedWindow/ManyKeys-10                    	30714757	        40.83 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTokenBucket/SingleKey-10                   	 6101956	       185.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTokenBucket/SingleKey-10                   	 6906738	       171.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTokenBucket/SingleKey-10                   	 6991621	       173.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTokenBucket/SingleKey-10                   	 6905952	       173.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTokenBucket/SingleKey-10                   	 6897529	       174.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTokenBucket/ManyKeys-10                    	30357043	        43.43 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTokenBucket/ManyKeys-10                    	29813571	        41.20 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTokenBucket/ManyKeys-10                    	27810474	        40.87 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTokenBucket/ManyKeys-10                    	26226592	        44.24 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTokenBucket/ManyKeys-10                    	26602917	        43.94 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSlidingWindowLog/SingleKey-10              	 6327151	       177.2 ns/op	      27 B/op	       0 allocs/op
+BenchmarkSlidingWindowLog/SingleKey-10              	 6438274	       177.2 ns/op	      26 B/op	       0 allocs/op
+BenchmarkSlidingWindowLog/SingleKey-10              	 6399361	       175.8 ns/op	      26 B/op	       0 allocs/op
+BenchmarkSlidingWindowLog/SingleKey-10              	 6452386	       186.6 ns/op	      26 B/op	       0 allocs/op
+BenchmarkSlidingWindowLog/SingleKey-10              	 5691669	       199.2 ns/op	      30 B/op	       0 allocs/op
+BenchmarkSlidingWindowLog/ManyKeys-10               	16626379	        74.29 ns/op	     155 B/op	       0 allocs/op
+BenchmarkSlidingWindowLog/ManyKeys-10               	21022203	        67.56 ns/op	     159 B/op	       0 allocs/op
+BenchmarkSlidingWindowLog/ManyKeys-10               	20722390	        67.30 ns/op	     161 B/op	       0 allocs/op
+BenchmarkSlidingWindowLog/ManyKeys-10               	20005444	        75.60 ns/op	     167 B/op	       0 allocs/op
+BenchmarkSlidingWindowLog/ManyKeys-10               	18920070	        61.25 ns/op	     177 B/op	       0 allocs/op
+BenchmarkSlidingWindowCounter/SingleKey-10          	 5787356	       178.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSlidingWindowCounter/SingleKey-10          	 6169347	       181.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSlidingWindowCounter/SingleKey-10          	 6225607	       181.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSlidingWindowCounter/SingleKey-10          	 6152462	       180.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSlidingWindowCounter/SingleKey-10          	 5768187	       185.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSlidingWindowCounter/ManyKeys-10           	24563254	        47.64 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSlidingWindowCounter/ManyKeys-10           	22532671	        47.42 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSlidingWindowCounter/ManyKeys-10           	25381538	        50.10 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSlidingWindowCounter/ManyKeys-10           	22846606	        45.35 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSlidingWindowCounter/ManyKeys-10           	26186078	        46.96 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/yuliiaharel/ratelimit/memory	66.013s

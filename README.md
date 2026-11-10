@@ -296,45 +296,180 @@ single mutex serializes every key, even ones that never contend with
 each other; sharding by key hash removes that false contention. It does
 nothing for one hot key, which still serializes on that key's shard.
 
-The effect, measured directly (`BenchmarkFixedWindow_ShardCount`, Apple
-M5, `go test -bench . -benchmem`, parallel access across 1024 keys):
+Measured with `BenchmarkFixedWindow_ShardCount`: parallel callers spread
+over 1024 keys, one mutex for everything (`shards=1`) against the default
+(`shards=32`), at several `GOMAXPROCS` values. Median ns/op of 5 runs;
+lower is better.
 
-| Shards | ns/op |
-|---|---|
-| 1 (one mutex for everything) | ~153 |
-| 32 (default) | ~39 |
+| GOMAXPROCS | 1 shard (single mutex) | 32 shards (default) | Sharded is faster by |
+|---|---|---|---|
+| 1 | 47.1 | 48.2 | 0.98x |
+| 2 | 92.5 | 47.7 | 1.9x |
+| 4 | 122.4 | 33.5 | 3.7x |
+| 8 | 159.2 | 38.5 | 4.1x |
+| 10 | 171.9 | 41.0 | 4.2x |
 
-About a 4x improvement at this core count and key spread, from a
-one-line change at each limiter's construction site.
+`go test -run '^$' -bench BenchmarkFixedWindow_ShardCount -benchmem -count=5 -cpu 1,2,4,8,10 ./memory/`
+on the machine described under [Benchmarks](#benchmarks); raw output in
+[`bench/raw/shards-gomaxprocs.txt`](bench/raw/shards-gomaxprocs.txt).
+
+What the numbers say:
+
+- **With one core there is nothing to win.** Both variants cost about 47-48
+  ns per call; sharding adds no measurable overhead and no benefit.
+- **The single mutex gets slower with every core added.** Per-call cost
+  rises from 47.1 ns to 171.9 ns between 1 and 10 cores, so total
+  throughput *falls* by about 3.6x: more cores means more time spent
+  handing the lock around, not more work done.
+- **Sharding stops that collapse, but it does not scale linearly.** With 32
+  shards the per-call cost stays between 33.5 and 48.2 ns at every core
+  count. Ten cores do about 1.2x the work of one, not 10x. The 4.2x gap at
+  10 cores is mostly the single mutex getting worse, not the sharded map
+  getting faster.
+- **Best throughput is at 4 cores**, and it drops slightly at 8 and 10. This
+  machine has 4 performance and 6 efficiency cores, so the extra cores are
+  slower ones; that is a likely contributor, but it was not isolated here.
+
+Why sharded throughput stays nearly flat was not investigated in this pass.
+A plausible cause is the benchmark's shape: every goroutine walks the same
+1024 keys in the same order, so every core keeps touching every shard's
+mutex and entries, and those cache lines bounce between cores even when no
+goroutine actually waits for a lock. That is a hypothesis, not a
+measurement.
+
+A single hot key gets no help from sharding, as expected: `SingleKey` in the
+table below (every call on one key) costs 174-181 ns at 10 cores, close to
+the single-mutex figure (171.9 ns).
 
 ---
 
 ## Benchmarks
 
-`go test -bench . -benchmem ./memory/...`, Apple M5 (10 cores), go1.27.2 darwin/arm64.
+Machine: Apple M5 (`Mac17,3`), 10 cores (4 performance + 6 efficiency), 24 GB
+RAM, macOS 26.6.2, go1.27.2 darwin/arm64. Redis 7.4.11 (`redis:7-alpine`) in
+Docker Desktop (engine 29.8.2). Run on 2026-11-10; the machine was not idle
+(load average 2.8-4.6). Every figure is the median of 5 runs
+(`-count=5`); raw output, per-benchmark min/max and the exact commands are in
+[`bench/`](bench/README.md).
+
+### In-memory limiters
+
+`go test -run '^$' -bench . -benchmem -count=5 ./memory/`, `GOMAXPROCS=10`.
 `SingleKey` is every call hitting the same key (worst case: one shard does all the work);
 `ManyKeys` spreads calls over 1024 distinct keys in parallel (where sharding pays off).
 
-| Backend / algorithm | ns/op (SingleKey) | ns/op (ManyKeys) | allocs/op |
+| Algorithm | ns/op (SingleKey) | ns/op (ManyKeys) | allocs/op |
 |---|---|---|---|
-| memory / fixed window | ~163 | ~38 | 0 |
-| memory / token bucket | ~168 | ~40 | 0 |
-| memory / sliding window log | ~175 | ~55 | 0 (small heap growth, see below) |
-| memory / sliding window counter | ~159 | ~42 | 0 |
-| redis / token bucket | | | |
-| service round-trip (p50 / p99) | | | |
+| fixed window | 175.8 | 40.6 | 0 |
+| token bucket | 173.7 | 43.4 | 0 |
+| sliding window log | 177.2 | 67.6 | 0 (small heap growth, see below) |
+| sliding window counter | 181.2 | 47.4 | 0 |
 
-Sliding window log reports 0 allocs/op but nonzero B/op (~26-150) under `-benchmem`: its
-per-key log occasionally grows its backing slice via `append`, which `go test` attributes
-to the slice's bytes rather than a separate allocation count. It's also the one algorithm
+Sliding window log reports 0 allocs/op but nonzero B/op (26-30 for `SingleKey`, 155-177
+for `ManyKeys`) under `-benchmem`: its per-key log occasionally grows its backing slice
+via `append`, which `go test` attributes to the slice's bytes rather than a separate
+allocation count. It's also the one algorithm
 whose *time* per call isn't O(1): Allow is O(stale entries evicted) amortized, which an
 earlier version of this benchmark caught failing at -- it was resumming the entire log by
 hand on every call instead of tracking total cost incrementally, making each call O(log
 length). Fixed before these numbers were taken; see `logState` in `slidingwindowlog.go`.
 
+### Redis backend and service round trip
+
+`go test -run '^$' -bench . -benchmem -count=5 ./redisstore/ ./service/`. Both start a
+Redis container through testcontainers. `Serial` is one caller, so ns/op is the latency
+of one call. `Parallel` is `GOMAXPROCS=10` concurrent callers, so ns/op there is
+wall time divided by calls (the inverse of throughput), not latency.
+
+| Benchmark | ns/op (Serial) | ns/op (Parallel) | allocs/op | p50 / p99 |
+|---|---|---|---|---|
+| redis / token bucket, one hot key | 102,810 | 33,549 | 20 | not measured |
+| redis / token bucket, 1024 keys | (same benchmark as above) | 33,613 | 20 | not measured |
+| service round-trip, serial | 144,624 | | 175 | 141 µs / 207 µs |
+| service round-trip, parallel | | 47,837 | 174 | 473 µs / 848 µs |
+
+- One Redis `Allow` (one Lua round trip) takes about 103 µs for a single caller, and
+  ten parallel callers get about 29,800 calls/s in total. Hot key or 1024 keys makes no
+  difference (33,549 vs 33,613 ns/op): Redis runs scripts one at a time either way.
+- The service adds about 42 µs on top of the Redis call for a single caller
+  (144.6 µs vs 102.8 µs), and 155 allocations per request (175 vs 20), from HTTP and
+  connect. Ten parallel callers get about 20,900 requests/s.
+- The Redis call is roughly 2,400x the cost of the in-memory token bucket
+  (102,810 ns vs 43.4 ns). The network round trip dominates, and here it crosses
+  Docker Desktop's macOS-to-VM boundary, so these numbers are specific to this setup.
+- The parallel p99 is the least stable figure: 0.70 ms to 1.48 ms across the five runs.
+
 ## Load test
 
-_TODO: harness description, throughput/latency (p50/p99) chart, accuracy (allowed vs. expected), critical vs. sheddable success rate under overload._
+**Harness.** [`cmd/loadtest`](cmd/loadtest) drives a running `ratelimitd` through the Go
+client. It is open-loop: requests go out on a fixed schedule that does not wait for
+responses, and latency is measured from each request's *scheduled* send time, so a slow
+server shows up as latency instead of quietly lowering the offered rate. Keys, costs and
+priorities are sampled from a seeded generator, so a run is repeatable. Accuracy compares
+admitted tokens with the most a correct token bucket may admit per key,
+`min(requested, burst + rate × duration)`.
+
+**Setup.** Redis 7.4.11 from `docker compose`; `ratelimitd` and the harness as host
+processes on the machine above, over loopback. Domain `api` from
+[`policies.yaml`](policies.yaml): 10 tokens/s and burst 20 per key, 30% of burst reserved
+for critical and a further 20% for default. 100 keys, so the sustained limit is 1000
+requests/s in aggregate. Cost 1, priority mix 10% critical / 60% default / 30% sheddable,
+30 s per scenario:
+
+```bash
+docker compose up -d && go run ./cmd/ratelimitd &
+go run ./cmd/loadtest -domain api -rate 10 -burst 20 -rps <500|1000|3000> \
+  -duration 30s -keys 100 -cost 1 -mix critical=10,default=60,sheddable=30 -seed 1
+```
+
+**Throughput and latency**
+
+| Scenario | Offered | Throughput | p50 | p99 | max | Errors / dropped |
+|---|---|---|---|---|---|---|
+| Under the limit (0.5x) | 500 rps | 500.0 rps | 0.99 ms | 1.52 ms | 19.96 ms | 0 / 0 |
+| At the limit (1x) | 1000 rps | 1000.0 rps | 0.75 ms | 1.33 ms | 11.68 ms | 0 / 0 |
+| Overload (3x) | 3000 rps | 3000.0 rps | 0.20 ms | 0.43 ms | 37.81 ms | 0 / 0 |
+
+**Accuracy**
+
+| Scenario | Admitted | Most a correct limiter may admit | Ratio | Over-admitted |
+|---|---|---|---|---|
+| Under the limit | 15,000 | 15,000 | 1.000 | 0 |
+| At the limit | 28,846 | 29,915 | 0.964 | 0 |
+| Overload (3x) | 31,267 | 32,000 | 0.977 | 0 |
+
+**Success rate by priority** (allowed / sent)
+
+| Scenario | Critical | Default | Sheddable |
+|---|---|---|---|
+| Under the limit | 100.0% (1,480 / 1,480) | 100.0% (8,954 / 8,954) | 100.0% (4,566 / 4,566) |
+| At the limit | 100.0% (2,925 / 2,925) | 99.7% (18,048 / 18,096) | 87.7% (7,873 / 8,979) |
+| Overload (3x) | 100.0% (8,924 / 8,924) | 40.4% (21,918 / 54,296) | 1.6% (425 / 26,780) |
+
+What the results show:
+
+- **The limit was never exceeded.** Over-admitted tokens are 0 in all three runs.
+- **Shedding follows priority.** At 3x overload every critical request got through,
+  default kept 40.4%, and sheddable was cut to 1.6%.
+- **Sheddable traffic is shed before the limit is reached.** At exactly 1x, 12.3% of
+  sheddable requests were denied and 3.6% of the allowance went unused. Keys are picked
+  at random, so a key regularly gets a short burst above its rate; its bucket then dips
+  below the sheddable floor (half the burst) and sheddable requests are refused although
+  tokens remain. This is the reserve working as configured, and it is the price of it.
+- **Under overload about 2.3% of the allowance stays unused** (733 of 32,000 tokens). That
+  is consistent with each of the 100 buckets ending the run near the critical reserve
+  (6 tokens) that default and sheddable traffic may not spend, though no per-key trace
+  was taken to confirm it.
+- **Latency went down as load went up** (p50 0.99 ms at 500 rps, 0.20 ms at 3000 rps),
+  the opposite of what a loaded server normally does. The cause was not investigated. At
+  low rates each request probably finds idle connections and sleeping threads, on a
+  path that includes Docker Desktop's network proxy, and pays to wake them up; treat
+  the low-rate latencies as a property of this setup, not of the limiter.
+- **These runs overload the limit, not the service.** 3000 rps is well below the roughly
+  20,900 requests/s the round-trip benchmark reached, so throughput equals the offered
+  rate in every scenario. The service's saturation point was not load-tested.
+
+Raw harness output and JSON summaries: [`bench/raw/loadtest/`](bench/raw/loadtest).
 
 ---
 
@@ -382,6 +517,7 @@ Each step is sized for one ~45-minute session.
 │   ├── ratelimitd/          # the service binary
 │   ├── example-server/
 │   └── loadtest/
+├── bench/                   # raw benchmark + load-test output behind the README numbers
 ├── policies.yaml
 ├── buf.yaml
 ├── docker-compose.yml

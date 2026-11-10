@@ -1,0 +1,12 @@
+target                   http://localhost:8080 (domain "api")
+offered                  500 rps for 30.0s, 100 keys, cost 1, mix critical=10,default=60,sheddable=30
+sent / dropped / errors  15000 / 0 / 0
+throughput               500.0 rps
+latency p50 / p99 / max  0.99 / 1.52 / 19.96 ms
+reasons                  ok 15000, over_limit 0, fail_open 0, fail_closed 0
+accuracy                 1.000 (admitted 15000 of 15000 expected tokens; over-admitted 0)
+
+priority   sent  allowed  success
+critical   1480  1480     100.0%
+default    8954  8954     100.0%
+sheddable  4566  4566     100.0%

@@ -1,0 +1,60 @@
+{
+  "config": {
+    "target": "http://localhost:8080",
+    "domain": "api",
+    "rps": 1000,
+    "keys": 100,
+    "key_prefix": "loadtest-1794345616301306000:",
+    "concurrency": 512,
+    "seed": 1,
+    "rate": 10,
+    "burst": 20
+  },
+  "duration_seconds": 30,
+  "elapsed_seconds": 29.999709375,
+  "cost": "1",
+  "priority_mix": "critical=10,default=60,sheddable=30",
+  "scheduled": 30000,
+  "sent": 30000,
+  "dropped": 0,
+  "errors": 0,
+  "offered_rps": 1000,
+  "throughput_rps": 1000.0096875938486,
+  "latency_ms": {
+    "p50": 0.753542,
+    "p99": 1.332083,
+    "max": 11.677542
+  },
+  "reasons": {
+    "ok": 28846,
+    "over_limit": 1154
+  },
+  "by_priority": [
+    {
+      "priority": "critical",
+      "sent": 2925,
+      "allowed": 2925,
+      "success_rate": 1
+    },
+    {
+      "priority": "default",
+      "sent": 18096,
+      "allowed": 18048,
+      "success_rate": 0.9973474801061007
+    },
+    {
+      "priority": "sheddable",
+      "sent": 8979,
+      "allowed": 7873,
+      "success_rate": 0.8768236997438468
+    }
+  ],
+  "accuracy": {
+    "rate": 10,
+    "burst": 20,
+    "expected_tokens": 29915,
+    "admitted_tokens": 28846,
+    "ratio": 0.9642654186862778,
+    "over_admitted_tokens": 0
+  }
+}
