@@ -21,10 +21,45 @@ import (
 // the YAML file. See redisstore.Policy (which this converts to) for
 // exactly what each field means.
 type Policy struct {
-	Rate               float64 `yaml:"rate"`
-	Burst              int     `yaml:"burst"`
-	ReserveForCritical float64 `yaml:"reserve_for_critical"`
-	ReserveForDefault  float64 `yaml:"reserve_for_default"`
+	Rate               float64     `yaml:"rate"`
+	Burst              int         `yaml:"burst"`
+	ReserveForCritical float64     `yaml:"reserve_for_critical"`
+	ReserveForDefault  float64     `yaml:"reserve_for_default"`
+	FailureMode        FailureMode `yaml:"failure_mode"`
+}
+
+// FailureMode is what RateLimitService answers for a domain when its
+// backend (Redis) errors or times out.
+type FailureMode string
+
+const (
+	// FailOpen allows requests while the backend is unavailable:
+	// availability over protection. This is the default for any domain
+	// that doesn't set failure_mode, so a limiter outage doesn't become
+	// an outage of every service that calls it.
+	FailOpen FailureMode = "fail_open"
+
+	// FailClosed denies requests while the backend is unavailable:
+	// protection over availability, for domains guarding something that
+	// must not be overrun (e.g. a paid third-party API).
+	FailClosed FailureMode = "fail_closed"
+)
+
+// DefaultFailureMode applies to any domain (and the file's default
+// policy) that leaves failure_mode unset.
+const DefaultFailureMode = FailOpen
+
+// resolve applies the default and rejects unknown values, so a typo
+// like "fail-closed" fails the reload instead of silently failing open.
+func (m FailureMode) resolve() (FailureMode, error) {
+	switch m {
+	case "":
+		return DefaultFailureMode, nil
+	case FailOpen, FailClosed:
+		return m, nil
+	default:
+		return "", fmt.Errorf("unknown failure_mode %q (want %q or %q)", m, FailOpen, FailClosed)
+	}
 }
 
 func (p Policy) toRedisstore() redisstore.Policy {
@@ -54,12 +89,30 @@ const fallbackName = "default"
 // silently inheriting a generous one.
 var defaultFallback = redisstore.Policy{Rate: 1, Burst: 1}
 
+// entry is one domain's validated limits plus its failure mode.
+type entry struct {
+	limits      redisstore.Policy
+	failureMode FailureMode
+}
+
+func (p Policy) toEntry() (entry, error) {
+	rp := p.toRedisstore()
+	if err := rp.Validate(); err != nil {
+		return entry{}, err
+	}
+	mode, err := p.FailureMode.resolve()
+	if err != nil {
+		return entry{}, err
+	}
+	return entry{limits: rp, failureMode: mode}, nil
+}
+
 // snapshot is one immutable, fully-validated view of the policy file.
 // Store swaps a *snapshot atomically on each successful reload, so
 // Lookup never blocks on, or sees a half-applied, reload.
 type snapshot struct {
-	byDomain map[string]redisstore.Policy
-	fallback redisstore.Policy
+	byDomain map[string]entry
+	fallback entry
 }
 
 // Store holds the currently-loaded policies and can watch its file
@@ -90,37 +143,39 @@ func (s *Store) reload() error {
 	}
 
 	snap := &snapshot{
-		byDomain: make(map[string]redisstore.Policy, len(f.Policies)),
-		fallback: defaultFallback,
+		byDomain: make(map[string]entry, len(f.Policies)),
+		fallback: entry{limits: defaultFallback, failureMode: DefaultFailureMode},
 	}
 	for domain, p := range f.Policies {
-		rp := p.toRedisstore()
-		if err := rp.Validate(); err != nil {
+		e, err := p.toEntry()
+		if err != nil {
 			return fmt.Errorf("policy: domain %q: %w", domain, err)
 		}
-		snap.byDomain[domain] = rp
+		snap.byDomain[domain] = e
 	}
 	if f.Default != nil {
-		rp := f.Default.toRedisstore()
-		if err := rp.Validate(); err != nil {
+		e, err := f.Default.toEntry()
+		if err != nil {
 			return fmt.Errorf("policy: default: %w", err)
 		}
-		snap.fallback = rp
+		snap.fallback = e
 	}
 
 	s.current.Store(snap)
 	return nil
 }
 
-// Lookup returns domain's policy and the name that governed the
-// decision -- domain itself, or "default" if domain has no entry of
-// its own. The name is what the service surfaces as PolicyId.
-func (s *Store) Lookup(domain string) (p redisstore.Policy, policyName string) {
+// Lookup returns domain's limits, its failure mode, and the name that
+// governed the decision -- domain itself, or "default" if domain has
+// no entry of its own. The name is what the service surfaces as
+// PolicyId. All three come from the same snapshot, so a concurrent
+// reload can't pair one version's limits with another's failure mode.
+func (s *Store) Lookup(domain string) (p redisstore.Policy, mode FailureMode, policyName string) {
 	snap := s.current.Load()
-	if p, ok := snap.byDomain[domain]; ok {
-		return p, domain
+	if e, ok := snap.byDomain[domain]; ok {
+		return e.limits, e.failureMode, domain
 	}
-	return snap.fallback, fallbackName
+	return snap.fallback.limits, snap.fallback.failureMode, fallbackName
 }
 
 // Watch reloads the policy file whenever it changes on disk, until ctx

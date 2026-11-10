@@ -166,7 +166,8 @@ that all-or-nothing check-and-commit server-side, in one script, rather than the
 client making N separate calls and hoping nothing changes between them.
 
 _TODO: latency budget for the extra network hop; a client-side local token cache
-to avoid a call per request entirely (roadmap step 9)._
+to avoid a call per request entirely. Step 9 added per-call deadlines and
+client-side fallback (see [Failure modes](#failure-modes)), but not a local cache._
 
 ### Policies
 
@@ -209,7 +210,82 @@ built up a large burst loses that headroom in one step the moment the new
 policy takes effect, rather than spending it down first.
 
 ### Failure modes
-_TODO: Redis or RateLimitService unavailable → fail-open (availability) vs. fail-closed (protection), per domain. Timeouts, circuit breaking._
+
+A rate limiter sits in front of other services, so when it breaks, the
+question is what it does to them. There are two places it can break, and each
+is handled where the most information is available.
+
+**Redis unavailable (service up).** Every Redis call runs under a deadline
+(`REDIS_TIMEOUT`, default 50ms, `service.WithBackendTimeout`). If the call
+errors or times out, the server doesn't return an error. It answers using the
+domain's `failure_mode` from the policy file:
+
+```yaml
+policies:
+  send-message:
+    rate: 2
+    burst: 5
+    failure_mode: fail_closed   # or fail_open; default fail_open
+```
+
+| `failure_mode` | Answer | `reason` |
+|---|---|---|
+| `fail_open` (default) | allowed, `remaining: 0` | `REASON_FAIL_OPEN` |
+| `fail_closed` | denied, `retry_after` = one token's refill time (`1/rate`) | `REASON_FAIL_CLOSED` |
+
+**The default is `fail_open`.** For most domains a limiter outage shouldn't
+also take down every service that calls it. Use `fail_closed` for domains
+where overrunning the limit is worse than refusing traffic, such as a paid
+third-party API or a fragile downstream. `failure_mode` hot-reloads like every
+other policy field. An unknown value (`fail-closed`, `open`) fails the reload,
+so a typo can't silently fail open. A batch with checks in several domains
+answers each check by its own domain's mode, and is allowed only if all of
+them are, i.e. only if every domain in it is `fail_open`.
+
+The `reason` is what lets callers and dashboards tell an admission under
+failure from a real one. `REASON_OK` means Redis counted the request.
+`REASON_FAIL_OPEN` means nobody did. Two cases are never answered by the
+failure mode:
+- **Invalid requests** (empty key, cost above burst) are still
+  `InvalidArgument`, so a fail-open allow can't hide a caller bug.
+- **A caller that cancelled or ran past its own deadline** gets `Canceled` or
+  `DeadlineExceeded`. Only the server's own Redis timeout triggers the
+  failure mode.
+
+The server is only as good as go-redis's deadline handling.
+`redis.Options.ContextTimeoutEnabled` must be set (`ratelimitd` sets it).
+Without it, go-redis ignores context deadlines on socket reads, so a stalled
+Redis holds each call for its own 3s `ReadTimeout`.
+
+**RateLimitService unreachable (client side).** The Go client puts a deadline
+on every call (`client.Config.Timeout`, default 200ms). If the service can't
+be reached (`Unavailable`) or doesn't answer in time, the client decides
+locally using `Config.Fallback`:
+
+| `client.FallbackMode` | Result |
+|---|---|
+| `FallbackFailOpen` (default) | allowed, `Reason: ReasonFailOpen` |
+| `FallbackFailClosed` | denied, `Reason: ReasonFailClosed`, `RetryAfter: Config.FallbackRetryAfter` (default 1s) |
+| `FallbackError` | the error is returned; the caller decides |
+
+`Config.DomainFallback` overrides the mode per domain and should normally
+mirror the server's `failure_mode` for that domain. The client can't read the
+policy file, so the two must be configured separately. A local decision sets
+`Decision.Fallback = true` and keeps the cause in `Decision.FallbackCause`. A
+server-side failure-mode answer arrives with `Fallback = false`, so callers can
+tell "Redis was down, the server decided" from "the service was down, the
+client decided". The client's 200ms default sits above the server's 50ms Redis
+timeout on purpose. When only Redis is slow, the server answers first with the
+domain's configured mode, which the client may not know.
+
+**No circuit breaker (yet).** During an outage, every request waits out the
+full timeout before the failure mode applies, so while Redis hangs, request
+latency rises to about `REDIS_TIMEOUT`. A breaker would stop calling Redis
+after repeated failures and answer immediately. It was left out of step 9 to
+keep the change small: done properly it needs per-instance failure tracking, a
+half-open probe to detect recovery, and a decision about whether batches
+count as one failure or many. It's future work. Until then, `REDIS_TIMEOUT`
+caps the added latency.
 
 ### Concurrency (in-memory backend)
 
@@ -283,8 +359,8 @@ Each step is sized for one ~45-minute session.
 **Service**
 - [x] **7. RateLimitService**: `.proto`, `buf generate`, connect-go server backed by Redis, Go client
 - [x] **8. Priority + policies**: criticality-aware shedding, YAML policies per domain with hot reload
-- [ ] **9. Failure modes + load test**: fail-open/closed per domain, timeouts, client-side fallback, load harness, results in README
-- [ ] **10. Polish**: fill in Design sections, diagrams, release `v0.1.0`, write the post
+- [x] **9. Failure modes + load test**: fail-open/closed per domain, timeouts, client-side fallback, load harness
+- [ ] **10. Polish**: load-test results in README, fill in Design sections, diagrams, release `v0.1.0`, write the post
 
 ---
 

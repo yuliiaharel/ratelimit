@@ -5,6 +5,11 @@
 # burst reserved for higher-priority traffic as the bucket drains: see
 # redisstore.Policy for exactly what they mean. Both default to 0 (no
 # reservation) if omitted.
+#
+# failure_mode is what the service answers while Redis is unavailable
+# (erroring, or slower than REDIS_TIMEOUT): fail_open allows requests,
+# fail_closed denies them. Defaults to fail_open if omitted. Responses
+# carry REASON_FAIL_OPEN / REASON_FAIL_CLOSED so callers can tell.
 policies:
   api:
     rate: 10
