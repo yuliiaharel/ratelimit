@@ -7,6 +7,9 @@
 //	REDIS_ADDR     Redis address (default "localhost:6379")
 //	POLICIES_PATH  path to the policy YAML file (default "policies.yaml")
 //	ADDR           address to listen on (default ":8080")
+//	REDIS_TIMEOUT  deadline for each Redis call, as a Go duration
+//	               (default service.DefaultBackendTimeout, 50ms). On
+//	               timeout or error, each domain's failure_mode decides.
 //
 // Run it (with Redis up via `docker compose up -d`):
 //
@@ -25,6 +28,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 
@@ -37,8 +41,22 @@ func main() {
 	redisAddr := getEnv("REDIS_ADDR", "localhost:6379")
 	policiesPath := getEnv("POLICIES_PATH", "policies.yaml")
 	addr := getEnv("ADDR", ":8080")
+	redisTimeout := service.DefaultBackendTimeout
+	if v := os.Getenv("REDIS_TIMEOUT"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			log.Fatalf("parsing REDIS_TIMEOUT=%q: %v", v, err)
+		}
+		if d <= 0 {
+			log.Fatalf("REDIS_TIMEOUT=%q: must be positive", v)
+		}
+		redisTimeout = d
+	}
 
-	client := redis.NewClient(&redis.Options{Addr: redisAddr})
+	// ContextTimeoutEnabled makes go-redis honor the server's per-call
+	// deadline on socket reads and writes; without it a stalled Redis
+	// holds each call for go-redis's own ReadTimeout (3s) instead.
+	client := redis.NewClient(&redis.Options{Addr: redisAddr, ContextTimeoutEnabled: true})
 	defer func() { _ = client.Close() }()
 
 	policies, err := policy.Load(policiesPath)
@@ -55,10 +73,10 @@ func main() {
 	}()
 
 	mux := http.NewServeMux()
-	path, handler := ratelimitv1connect.NewRateLimitServiceHandler(service.NewServer(client, policies))
+	path, handler := ratelimitv1connect.NewRateLimitServiceHandler(service.NewServer(client, policies, service.WithBackendTimeout(redisTimeout)))
 	mux.Handle(path, handler)
 
-	log.Printf("ratelimitd listening on %s (redis=%s policies=%s)", addr, redisAddr, policiesPath)
+	log.Printf("ratelimitd listening on %s (redis=%s redis_timeout=%s policies=%s)", addr, redisAddr, redisTimeout, policiesPath)
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatalf("serve: %v", err)
 	}
