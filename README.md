@@ -359,8 +359,8 @@ Each step is sized for one ~45-minute session.
 **Service**
 - [x] **7. RateLimitService**: `.proto`, `buf generate`, connect-go server backed by Redis, Go client
 - [x] **8. Priority + policies**: criticality-aware shedding, YAML policies per domain with hot reload
-- [ ] **9. Failure modes + load test**: fail-open/closed per domain, timeouts, client-side fallback, load harness, results in README
-- [ ] **10. Polish**: fill in Design sections, diagrams, release `v0.1.0`, write the post
+- [x] **9. Failure modes + load test**: fail-open/closed per domain, timeouts, client-side fallback, load harness
+- [ ] **10. Polish**: load-test results in README, fill in Design sections, diagrams, release `v0.1.0`, write the post
 
 ---
 
