@@ -1,4 +1,20 @@
-// Package service implements RateLimitService, backed by Redis.
+// Package service implements RateLimitService, backed by Redis: the
+// server other services call to ask whether a request may proceed.
+//
+// A request names a domain and a key. The domain selects a policy
+// (rate, burst, priority reserves, failure mode) from a policy.Store,
+// looked up on every request so a reloaded policy file applies
+// immediately. The check itself is a redisstore token bucket keyed by
+// domain and key.
+//
+// Server implements the generated connect handler, so it is mounted on
+// an http.ServeMux and answers the Connect protocol, which includes
+// plain HTTP/JSON POSTs. cmd/ratelimitd is the ready-made binary.
+//
+// When Redis fails or exceeds the backend timeout the server still
+// answers, allowing or denying according to the domain's failure
+// mode, and marks the response with REASON_FAIL_OPEN or
+// REASON_FAIL_CLOSED.
 package service
 
 import (

@@ -2,7 +2,7 @@
 
 A distributed rate limiter in Go. It ships as a library (pluggable algorithms, in-memory or Redis backends, gRPC interceptors) and as a standalone **RateLimitService** that other services call over RPC before doing expensive work.
 
-> Status: 🚧 in progress. See [Roadmap](#roadmap).
+> Status: **v0.1.0**. All ten [roadmap](#roadmap) steps are done; see the [changelog](CHANGELOG.md). The API may still change before 1.0.
 
 ---
 
@@ -29,10 +29,13 @@ This project is about **application-aware rate limiting**: limits that key off c
 The limiter runs in-process. Requests over the limit fail fast with `RESOURCE_EXHAUSTED` and a `RetryInfo` detail.
 
 ```go
-lim := memory.NewTokenBucket(memory.TokenBucketConfig{
-    Rate:  10,   // tokens per second
-    Burst: 20,   // bucket capacity
+lim, err := memory.NewTokenBucket(memory.TokenBucketConfig{
+    Rate:  10, // tokens per second
+    Burst: 20, // bucket capacity
 })
+if err != nil {
+    log.Fatal(err)
+}
 
 keyFunc := interceptor.KeyFromMetadata("x-api-key")
 srv := grpc.NewServer(
@@ -41,23 +44,60 @@ srv := grpc.NewServer(
 )
 ```
 
+Any `ratelimit.Limiter` works here, including `redisstore.TokenBucket` for a limit
+shared across processes. The interceptors charge one token per call at default
+priority; per-request cost and priority are available by calling the limiter (or the
+service) directly. A runnable version is in
+[`cmd/example-server`](cmd/example-server/main.go).
+
 ### 2. As a service: RateLimitService
 
 Services ask a shared limiter before doing work. Redis holds the counters, so limits hold across the whole fleet.
 
-```
-client service ──ShouldAllow(domain, key, cost, priority)──▶ RateLimitService ──Lua──▶ Redis
-               ◀──────── allowed / remaining / retry_after ─────────┘
+```mermaid
+sequenceDiagram
+    participant C as Client service
+    participant S as RateLimitService
+    participant R as Redis
+    C->>S: ShouldAllow(domain, key, cost, priority)
+    S->>S: look up the domain's policy
+    S->>R: one Lua script (refill, check, consume)
+    R-->>S: allowed, tokens left, retry after
+    S-->>C: allowed, reason, limit, remaining, retry_after
 ```
 
 API: [`proto/ratelimit/v1/ratelimit.proto`](proto/ratelimit/v1/ratelimit.proto). Built with `connect-go`, so the same service also answers plain HTTP/JSON:
 
 ```bash
-docker compose up -d
+docker compose up -d          # Redis
+go run ./cmd/ratelimitd &     # the service, on :8080, reading policies.yaml
+
 curl -s localhost:8080/ratelimit.v1.RateLimitService/ShouldAllow \
   -H 'Content-Type: application/json' \
   -d '{"domain":"api","key":"user:42","cost":1}'
+# {"allowed":true, "reason":"REASON_OK", "limit":20, "remaining":19, "retryAfter":"0s", "policyId":"api"}
 ```
+
+From Go, use the [`client`](client) package:
+
+```go
+c := client.New("http://localhost:8080", nil)
+d, err := c.ShouldAllow(ctx, client.Check{
+    Domain:   "api",
+    Key:      "user:42",
+    Cost:     5,
+    Priority: client.PrioritySheddable,
+})
+if err != nil {
+    return err
+}
+if !d.Allowed {
+    // back off for d.RetryAfter
+}
+```
+
+`ratelimitd` is configured through `REDIS_ADDR`, `POLICIES_PATH`, `ADDR` and
+`REDIS_TIMEOUT`; see [`cmd/ratelimitd`](cmd/ratelimitd/main.go).
 
 ---
 
@@ -82,7 +122,14 @@ type Decision struct {
 }
 ```
 
-All time comes through an injectable `Clock`, so tests are deterministic.
+The in-memory limiters read time through an injectable `Clock`, so their tests are
+deterministic (`clocktest` provides a fake one). The Redis backend uses Redis's own
+clock instead; see [Time source](#time-source).
+
+`Cost` is honored by every implementation. `Priority` is honored by the Redis backend
+and the service; the in-memory limiters treat all priorities alike. A request whose
+cost is larger than the limit can never succeed, so it returns `ErrCostExceedsLimit`
+instead of a denial.
 
 ---
 
@@ -95,7 +142,85 @@ All time comes through an injectable `Clock`, so tests are deterministic.
 | Sliding window log | O(requests) | Exact | Good | Memory-heavy at high rates |
 | Sliding window counter | O(1) | Approximate (weighted) | Good | Best accuracy/memory trade-off |
 
-_TODO: one paragraph + diagram per algorithm._
+All four are implemented in [`memory`](memory). The token bucket also has a Redis
+implementation ([`redisstore`](redisstore)), which is what the service uses. In every
+algorithm a denied request consumes nothing.
+
+### Fixed window
+
+Time is cut into windows of equal length, aligned to the Unix epoch, and each key has
+one counter for the current window. A request is allowed if the counter plus its cost
+stays within the limit; the counter starts again from zero when the next window
+begins. It is the cheapest algorithm and the easiest to reason about, with one known
+weakness: a client can spend the full limit at the end of one window and again at the
+start of the next, which is up to twice the limit within a few milliseconds
+(`TestWindowEdgeAccuracy` shows exactly that).
+
+```mermaid
+flowchart LR
+    A["Request with cost c"] --> B{"New window since<br/>the last request?"}
+    B -- yes --> C["used = 0"] --> D
+    B -- no --> D{"used + c ≤ limit?"}
+    D -- yes --> E["used = used + c<br/>ALLOW"]
+    D -- no --> F["DENY<br/>retry after: end of window"]
+```
+
+### Token bucket
+
+Each key has a bucket that holds up to `Burst` tokens and refills continuously at
+`Rate` tokens per second. A request takes `cost` tokens if the bucket has them and is
+denied otherwise, with `RetryAfter` set to the time the missing tokens take to refill.
+A new key starts with a full bucket. There are no windows, so there is no edge to
+exploit: the long-run rate is exactly `Rate`, and `Burst` is the only source of
+burstiness, set explicitly. This is the default choice, and the only algorithm with a
+Redis implementation.
+
+```mermaid
+flowchart LR
+    A["Request with cost c"] --> B["Refill:<br/>tokens = min(Burst, tokens + elapsed × Rate)"]
+    B --> C{"tokens ≥ c?"}
+    C -- yes --> D["tokens = tokens − c<br/>ALLOW"]
+    C -- no --> E["DENY<br/>retry after: (c − tokens) / Rate"]
+```
+
+In the Redis version the check is `tokens − c ≥ floor`, where the floor depends on the
+request's priority; see [Cost and priority](#cost-and-priority).
+
+### Sliding window log
+
+Each key keeps a log of the requests it was granted, with their timestamps and costs.
+On every call, entries older than the window are dropped and the request is allowed
+if the cost still in the log plus its own stays within the limit. The count is exact
+over any interval of one window length, with no edge effect. The price is memory: one
+log entry per granted request, so up to `Limit` entries per active key, which gets
+expensive for high limits and many keys.
+
+```mermaid
+flowchart LR
+    A["Request with cost c<br/>at time t"] --> B["Drop log entries<br/>older than t − Window"]
+    B --> C{"cost in log + c ≤ limit?"}
+    C -- yes --> D["Append (t, c) to the log<br/>ALLOW"]
+    C -- no --> E["DENY<br/>retry after: when enough<br/>old entries age out"]
+```
+
+### Sliding window counter
+
+An approximation of the sliding window log in constant memory. Each key keeps two
+counters: the current epoch-aligned window and the one before it. The usage of the
+trailing window is estimated as the current counter plus the previous counter weighted
+by how much of the previous window the trailing window still overlaps. Halfway through
+a window, half of the previous window's usage still counts. This removes the fixed
+window's 2× edge burst. The estimate assumes the previous window's requests were
+spread evenly, so it can be off when they were not, and `RetryAfter` is approximate
+for the same reason.
+
+```mermaid
+flowchart LR
+    A["Request with cost c,<br/>fraction f into the<br/>current window"] --> B["estimate =<br/>previous × (1 − f) + current"]
+    B --> C{"estimate + c ≤ limit?"}
+    C -- yes --> D["current = current + c<br/>ALLOW"]
+    C -- no --> E["DENY<br/>retry after: approximate"]
+```
 
 ---
 
@@ -124,8 +249,9 @@ skew between app servers directly skew the limit.
 
 **Cost**: `ShouldAllowRequest.cost` flows straight into the same `Request.Cost` /
 `EffectiveCost()` every limiter already uses -- a cost-N request consumes N tokens
-in one atomic check, the same whether it's checked via the Go `Limiter` interface,
-a gRPC interceptor, or RateLimitService over HTTP/JSON.
+in one atomic check, the same whether it's checked via the Go `Limiter` interface
+or RateLimitService over HTTP/JSON. (The gRPC interceptors always charge 1: they
+have no hook yet for deriving a cost from the request. That is future work.)
 
 **Priority**: each `redisstore.Policy` reserves a fraction of its bucket for
 higher-priority traffic as it drains, via `ReserveForCritical` and
@@ -165,9 +291,54 @@ are only consumed when all of them pass. `redisstore/tokenbucketbatch.lua` does
 that all-or-nothing check-and-commit server-side, in one script, rather than the
 client making N separate calls and hoping nothing changes between them.
 
-_TODO: latency budget for the extra network hop; a client-side local token cache
-to avoid a call per request entirely. Step 9 added per-call deadlines and
-client-side fallback (see [Failure modes](#failure-modes)), but not a local cache._
+```bash
+curl -s localhost:8080/ratelimit.v1.RateLimitService/ShouldAllowBatch \
+  -H 'Content-Type: application/json' \
+  -d '{"checks":[{"domain":"api","key":"user:7"},{"domain":"send-message","key":"tenant:acme","cost":2}]}'
+```
+
+The checks in one batch may belong to different domains with different policies;
+`redisstore/tokenbucketbatchpolicy.lua` carries each key's own rate, burst and
+priority floor. `client.ShouldAllowBatch` is the Go equivalent.
+
+**Latency budget.** Using the service puts a network round trip in front of every
+request it guards. What that costs, from the measurements under
+[Benchmarks](#benchmarks) and [Load test](#load-test) (one machine, loopback, Redis in
+a container, so a lower bound for a real network):
+
+| Step | Cost |
+|---|---|
+| In-process token bucket, for comparison | 43 ns |
+| One Redis `Allow` (Lua round trip), single caller | about 103 µs |
+| Service on top of that (HTTP + connect), single caller | about 42 µs |
+| Whole round trip, single caller | p50 141 µs, p99 207 µs |
+| Whole round trip at 500 to 3000 requests/s (load test) | p50 0.20 to 0.99 ms, p99 0.43 to 1.52 ms |
+
+So the budget to plan for is roughly a millisecond or two per guarded request in the
+normal case, on top of the real network distance between caller and service, which
+these numbers do not include. The worst case is bounded by two deadlines, not by the
+network: the server gives Redis 50 ms (`REDIS_TIMEOUT`) before answering with the
+domain's failure mode, and the Go client gives the service 200 ms
+(`client.Config.Timeout`) before deciding locally. A request guarded through the Go
+client therefore never waits more than the client timeout for its decision.
+
+Ways to spend less of that budget:
+
+- **Batching** (built). A request that needs several limits checked, such as per user
+  and per tenant, pays for one round trip instead of several.
+- **Running the limiter in-process** (built). A service that only needs a per-process
+  limit, or that talks to Redis itself through `redisstore`, skips the hop to the
+  service entirely.
+- **A client-side token cache** (not built; future work). The client would lease a
+  small block of tokens per key from the service and admit requests locally until
+  the block runs out, so most requests make no call at all. The cost is accuracy: a
+  key can overshoot by up to one leased block per client instance, and leased tokens
+  that go unused are lost or have to be returned. It also needs a rule for which keys
+  are worth leasing for, since it only pays off for busy keys.
+- **Caching denials** (not built; future work). A denial already carries
+  `retry_after`, so a client could refuse the same key locally until then without
+  asking again. Priority makes this less simple than it sounds: a denial for a
+  sheddable request says nothing about a critical one on the same key.
 
 ### Policies
 
@@ -475,13 +646,67 @@ Raw harness output and JSON summaries: [`bench/raw/loadtest/`](bench/raw/loadtes
 
 ## Scaling further
 
-_TODO: what changes at 100× — local pre-aggregation, Redis Cluster key hashing, hot keys, regional vs. global limits._
+What the current design does at higher load, and what would have to change. Nothing
+in this section beyond the "today" paragraphs is built.
+
+**Today.** Every check through the service is one Redis round trip against one Redis
+instance. Redis runs the Lua scripts one at a time, so that instance is the ceiling:
+on the benchmark machine ten parallel callers got about 29,800 `Allow` calls per
+second from Redis directly and about 20,900 requests per second through the service.
+`ratelimitd` itself holds no counters, so any number of instances can run side by side
+against the same Redis; adding instances adds HTTP capacity, not Redis capacity. Redis
+memory is bounded by the number of *active* keys: each bucket is one small hash that
+expires after twice its refill time (at least 60 s) without traffic. The in-memory
+limiters are different: they never evict a key, so their memory grows with the number
+of distinct keys seen until the process restarts.
+
+**Local pre-aggregation (future work).** The first thing to give at 100× is the
+one-round-trip-per-request rule. Each service instance, or each client, would take
+tokens from Redis in blocks and admit requests from its local block, turning N Redis
+calls into one per block. This is the same idea as the client-side token cache under
+[The extra hop](#the-extra-hop), and it has the same price: the limit becomes
+approximate by up to (number of holders × block size), and blocks need an expiry so
+tokens held by an idle or crashed holder flow back. Block size would have to adapt:
+large for busy keys, zero for quiet ones.
+
+**Redis Cluster key hashing (future work).** One Redis instance is also a single
+point of failure and a memory ceiling. Today the code takes a `*redis.Client`, which
+talks to one instance, and it is not Cluster-ready for one specific reason: the batch
+scripts touch several keys in one script, and Cluster only allows that when all the
+keys hash to the same slot. Bucket keys look like `ratelimit:tb:<domain>:<key>`, with
+no hash tag, so the keys of a typical batch (a user and a tenant) would land on
+different shards and the script would be rejected. The single-key path has no such
+problem. The options are to add hash tags so that keys that are batched together
+share a slot, which only works when there is a natural grouping such as the tenant,
+or to give up atomicity for cross-slot batches and check each shard separately, with
+a refund step when one of them denies. Neither is implemented.
+
+**Hot keys.** One very busy key is the case sharding does not help, in either
+backend. In memory, all calls for one key serialize on that key's lock (174 to 181 ns
+per call at 10 cores, against 41 to 68 ns when calls are spread over many keys). In
+Redis, a hot key costs the same as any other key on a single instance (33,549 vs
+33,613 ns per call), but in a cluster it would pin all of its load to one shard, and
+no amount of rebalancing moves it. The fix is again local pre-aggregation, applied
+only to the keys that need it: detect the hot keys and serve them from leased blocks.
+Not implemented.
+
+**Regional vs. global limits (future work).** Today a limit is exactly as global as
+its Redis: every caller of one Redis shares one bucket per key, and there is no notion
+of region. Serving several regions from one Redis keeps limits exact but adds a
+cross-region round trip to every request far from it, and makes that region's Redis a
+dependency for all of them. The alternative is one Redis per region. Then each limit
+has to be either regional on purpose (each region enforces its own share of the
+quota, which wastes capacity when traffic is uneven) or global and approximate
+(regions exchange usage in the background and each enforces against a slightly stale
+total). Which one is right depends on what the limit protects: a regional backend's
+capacity is naturally a regional limit, while a customer's paid quota is naturally
+global. The policy file has no way to say this yet.
 
 ---
 
 ## Roadmap
 
-Each step is sized for one ~45-minute session.
+Each step was sized for one ~45-minute session. All ten are done.
 
 **Library**
 - [x] **1. Scaffold**: `go mod init`, `Limiter` interface, `Clock` abstraction, fixed window (in-memory), table-driven tests, GitHub Actions (`go test -race`, `golangci-lint`)
@@ -495,7 +720,7 @@ Each step is sized for one ~45-minute session.
 - [x] **7. RateLimitService**: `.proto`, `buf generate`, connect-go server backed by Redis, Go client
 - [x] **8. Priority + policies**: criticality-aware shedding, YAML policies per domain with hot reload
 - [x] **9. Failure modes + load test**: fail-open/closed per domain, timeouts, client-side fallback, load harness
-- [ ] **10. Polish**: load-test results in README, fill in Design sections, diagrams, release `v0.1.0`, write the post
+- [x] **10. Polish**: load-test results in README, fill in Design sections, diagrams, release `v0.1.0`, write the post ([draft](docs/post.md))
 
 ---
 
@@ -503,24 +728,27 @@ Each step is sized for one ~45-minute session.
 
 ```
 .
-├── limiter.go               # Limiter, Request, Decision, Clock
+├── limiter.go               # Limiter, Request, Decision, Priority, Clock
+├── example_test.go          # runnable example for the core interface
 ├── clocktest/               # fake clock for deterministic tests
-├── memory/                  # in-memory algorithms
-├── redisstore/              # Redis backend + Lua scripts
+├── memory/                  # in-memory algorithms + sharded per-key locks
+├── redisstore/              # Redis token bucket + Lua scripts (single, batch, cross-policy batch)
 ├── interceptor/             # gRPC unary + stream interceptors
 ├── proto/ratelimit/v1/      # service API
 ├── gen/                     # generated code (buf)
 ├── service/                 # RateLimitService server
 ├── policy/                  # YAML policy loading + hot reload
-├── client/                  # Go client with local cache + fallback
+├── client/                  # Go client with per-call deadlines + fallback
 ├── cmd/
 │   ├── ratelimitd/          # the service binary
-│   ├── example-server/
-│   └── loadtest/
+│   ├── example-server/      # gRPC server with the interceptors wired in
+│   └── loadtest/            # open-loop load harness
 ├── bench/                   # raw benchmark + load-test output behind the README numbers
-├── policies.yaml
-├── buf.yaml
-├── docker-compose.yml
+├── docs/post.md             # write-up draft
+├── CHANGELOG.md
+├── policies.yaml            # example per-domain policies, used by ratelimitd
+├── buf.yaml, buf.gen.yaml
+├── docker-compose.yml       # Redis for local runs
 └── .github/workflows/ci.yml
 ```
 

@@ -1,5 +1,24 @@
 // Package redisstore backs a ratelimit.Limiter with Redis, so the limit
 // holds across every instance of a service rather than per-process.
+//
+// TokenBucket is the same algorithm as memory.TokenBucket. Each Allow
+// call runs one Lua script that reads, refills, checks and writes the
+// bucket in a single atomic step, using Redis's own clock, so
+// concurrent callers in different processes can't race each other and
+// don't need synchronized clocks. Idle buckets expire on their own.
+//
+// Unlike the in-memory limiters it honors Request.Priority: a Policy
+// can reserve part of the bucket for higher-priority traffic, so
+// sheddable requests are refused first as the bucket drains.
+//
+// TokenBucket.AllowBatch and AllowBatchAcrossPolicies check several
+// keys in one all-or-nothing round trip. They pass several keys to one
+// script, which works against a single Redis instance; this package
+// does not support Redis Cluster.
+//
+// A Redis error is returned to the caller as an error. Deciding
+// whether to allow or deny in that case is left to the caller; package
+// service does it per domain.
 package redisstore
 
 import (
