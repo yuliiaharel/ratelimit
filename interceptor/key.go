@@ -1,5 +1,15 @@
 // Package interceptor adapts a ratelimit.Limiter into gRPC unary and
 // streaming server interceptors.
+//
+// A KeyFunc extracts the key to limit on from the incoming context,
+// e.g. an API key header via KeyFromMetadata. Each check charges one
+// token at default priority. A call over the limit fails with
+// codes.ResourceExhausted and a RetryInfo detail saying how long to
+// back off; a call with no key fails with codes.InvalidArgument; a
+// limiter error fails with codes.Internal.
+//
+// Streams are checked once when they open (PerStream) or before every
+// message the client sends (PerMessage).
 package interceptor
 
 import (

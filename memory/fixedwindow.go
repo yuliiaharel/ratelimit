@@ -1,4 +1,23 @@
-// Package memory contains in-process limiter implementations.
+// Package memory contains in-process limiter implementations: state
+// lives in the calling process, so a limit applies per process, not
+// across a fleet (see package redisstore for that).
+//
+// Four algorithms implement ratelimit.Limiter:
+//
+//   - FixedWindow: one counter per epoch-aligned window. Simplest, but
+//     allows up to 2x the limit across a window boundary.
+//   - TokenBucket: a steady refill rate plus an explicit burst size. A
+//     good default.
+//   - SlidingWindowLog: exact count over the trailing window, at the
+//     price of one log entry per granted request.
+//   - SlidingWindowCounter: approximates the trailing window from two
+//     counters, in constant memory.
+//
+// All of them are safe for concurrent use, charge Request.Cost tokens
+// per call, and read time from an injectable ratelimit.Clock.
+// Request.Priority is ignored. Per-key state is kept until the process
+// exits: idle keys are not evicted, so memory grows with the number of
+// distinct keys seen.
 package memory
 
 import (

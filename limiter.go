@@ -1,6 +1,26 @@
-// Package ratelimit defines the core types shared by every limiter
-// implementation: the Limiter interface, the Request a caller submits,
-// the Decision it gets back, and the Clock all implementations read time from.
+// Package ratelimit is a rate limiter that can run in-process or as a
+// shared service. This package defines the core types every
+// implementation shares: the Limiter interface, the Request a caller
+// submits, the Decision it gets back, and the Clock implementations
+// read time from.
+//
+// A Request names a key (what is being limited, e.g. "user:42"), a
+// cost (how many tokens it consumes) and a priority. A Decision says
+// whether it may proceed and, if not, how long to wait.
+//
+// The implementations live in subpackages:
+//
+//   - memory: in-process fixed window, token bucket, sliding window
+//     log and sliding window counter. They honor cost but treat every
+//     priority alike.
+//   - redisstore: a token bucket in Redis, atomic via a Lua script, so
+//     one limit holds across many processes. Honors cost and priority.
+//   - interceptor: gRPC unary and stream server interceptors around
+//     any Limiter.
+//   - service, policy, client: RateLimitService, a standalone server
+//     with per-domain policies that other services call before doing
+//     work, and its Go client. The binary is cmd/ratelimitd.
+//   - clocktest: a fake Clock for deterministic tests.
 package ratelimit
 
 import (
